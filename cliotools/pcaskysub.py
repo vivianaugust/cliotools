@@ -311,7 +311,67 @@ def update_progress(n,max_value):
     sys.stdout.write(text)
     sys.stdout.flush()
 
-def clio_skysubtract(path, K_klip=5, skip_list = False):
+
+def badpixelsub(image, imhdr, nan = False):
+    """Replace known bad pixels with 0 or nan
+       Parameters:
+       -----------
+       image : 2d array
+           science image
+       imhdr : fits header object
+           fits header for the science image
+       nan : bool
+           Set to True to replace bad pixels with NaNs.  Otherwise they 
+           are replaced with 0 values.
+           
+       Returns:
+       --------
+       im_badpixfix : 2d array
+           science image
+
+    """
+    from astropy.io import fits
+    import numpy as np
+    # Open correct bad pixel mask for the image size:
+    if imhdr['NAXIS2'] == 512:
+        # Open full frame pixel mask:
+        badpixname = 'badpix_fullframe.fit'
+    elif imhdr['NAXIS2'] == 300:
+        # strip mode:
+        badpixname = 'badpix_strip.fit'
+    elif imhdr['NAXIS2'] == 200:
+        # stamp mode:
+        badpixname = 'badpix_stamp.fit'
+    elif imhdr['NAXIS2'] == 50:
+        # substamp mode:
+        badpixname = 'badpix_substamp.fit'
+    else:
+        print("'Scuse me what?")
+
+    try:
+        badpixels = fits.getdata('CLIO_badpix/'+badpixname)
+    except:
+        # If the bad pixel maps aren't where expected, enter the correct path or retrieve the maps
+        # from the zero wiki:
+        print("Hmm I can't find the necessary bad pixel map. Shall I retrive it from the zero wiki?")
+        yn = input("Type the path to the pixel masks, or type y to retrieve it.")
+        if str(yn) == 'y':
+            print('retrieving bad pixel map...')
+            import requests
+            url = 'https://magao-clio.github.io/zero-wiki/6d927/attachments/1242c/'+badpixname
+            r = requests.get(url)
+            with open(badpixname, 'wb') as f:
+                f.write(r.content)
+            print('Done.  Importing bad pixel map... done')
+            badpixels = fits.getdata(badpixname)
+        else:
+            badpixels = fits.getdata(str(yn))
+    im_badpixfix = image.copy()
+    im_badpixfix[np.where(badpixels > 0)] = 0
+
+    return im_badpixfix
+
+def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
     """Skysubtract an entire dataset
        Parameters:
        -----------
@@ -321,12 +381,24 @@ def clio_skysubtract(path, K_klip=5, skip_list = False):
                would take as input a path string of 'BDI0933/BDI0933__'
        K_klip : int
            Number of basis modes to use in subtraction 
+       skip_list : bool
+           Set to True if a list of paths to science files has already been made.  List
+           must be named "list"
+       write_file : bool
+           Set to False to skip writing the sky subtracted file to disk.  
+       badpixelreplace : bool
+           Set to False to skip replacing bad pixels
            
        Returns:
        --------
-       writes skysubtracted images to file with filename appended with 'skysub'
+       If write_file = True, writes skysubtracted images to file with filename appended with 'skysub'
        ex: skysubtracted images of BDI0933__00xxx.fit are written to same directory
            as original with filename BDI0933__00xxx_skysub.fit
+       If write_file = False, returns
+          skysub : 2d array
+              sky subtracted image
+          imhdr : fits image header object
+              original header object plus added comment noting sky subtraction
 
     """
     from astropy.io import fits
@@ -365,10 +437,15 @@ def clio_skysubtract(path, K_klip=5, skip_list = False):
                 skysub, sky = skysub_single_imagestack(ims[i], Z0, K_klip, shape[0])
             elif len(shape) == 2:
                 skysub, sky = skysub_single_image(ims[i], Z0, K_klip)
+        # Replace known bad pixels with 0:
+        skysub = badpixelsub(skysub, imhdr)
         # Append the image header.
-        imhdr['COMMENT'] = '         Sky subtracted on '+time.strftime("%m/%d/%Y")+ ' By Logan A. Pearce'
-        # Write sky subtracted image to file.
-        fits.writeto(str(ims[i]).split('.')[0]+'_skysub.fit',skysub,imhdr,overwrite=True)
+        imhdr['COMMENT'] = '    Sky subtracted and bad pixel corrected on '+time.strftime("%m/%d/%Y")+ ' By Logan A. Pearce'
+        if write_file == True:
+            # Write sky subtracted image to file.
+            fits.writeto(str(ims[i]).split('.')[0]+'_skysub.fit',skysub,imhdr,overwrite=True)
+        else:
+            return skysub, imhdr
         count+=1
         update_progress(count,len(ims))
     print('Done.')
