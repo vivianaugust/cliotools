@@ -119,7 +119,8 @@ def findstars_in_dataset(dataset_path, xca, yca, xcb, ycb, boxsizex = 60, boxsiz
             xca_subpix, yca_subpix, xcb_subpix, ycb_subpix = findstars(imstamp, im, \
                                                            xca, yca, xcb, ycb, \
                                                            boxsizex = 60, boxsizey = 60)
-            #xca, yca, xcb, ycb = xca_subpix, yca_subpix, xcb_subpix, ycb_subpix
+            if count % 25 == 0:
+                xca, yca, xcb, ycb = xca_subpix, yca_subpix, xcb_subpix, ycb_subpix
             string = im + ' ' + str(xca_subpix)+' '+str(yca_subpix)+' '+str(xcb_subpix)+' '+str(ycb_subpix)
         except:
             # DAOStarFinder failed to find a point source due to poor image quality.  Make

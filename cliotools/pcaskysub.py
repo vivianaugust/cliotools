@@ -457,4 +457,83 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
         update_progress(count,len(ims))
     print('Done.')
 
+def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
+        """Skysubtract an entire dataset using sky frames rather than opposite nods.
+       Parameters:
+       -----------
+       path : str
+           path to science images including image prefixes and underscores.  
+           ex: An image set of target BDI0933 with filenames of the form BDI0933__00xxx.fit
+               would take as input a path string of 'BDI0933/BDI0933__'
+       skyframepath : str
+           path to sky frames including image prefixes and underscores.  
+           ex: An image set of target BDI1350 with sky frame names of the form BDI1350sky_00xxx.fit
+               would take as input a path string of 'BDI1350/BDI1350sky_'
+       K_klip : int
+           Number of basis modes to use in subtraction 
+       skip_list : bool
+           Set to True if a list of paths to science files has already been made.  List
+           must be named "list"
+       write_file : bool
+           Set to False to skip writing the sky subtracted file to disk.  
+       badpixelreplace : bool
+           Set to False to skip replacing bad pixels
+           
+       Returns:
+       --------
+       If write_file = True, writes skysubtracted images to file with filename appended with 'skysub'
+       ex: skysubtracted images of BDI0933__00xxx.fit are written to same directory
+           as original with filename BDI0933__00xxx_skysub.fit
+       If write_file = False, returns
+          skysub : 2d array
+              sky subtracted image
+          imhdr : fits image header object
+              original header object plus added comment noting sky subtraction
+
+    """
+    from astropy.io import fits
+    import time
+    import os
+    import sys
+    from cliotools.pcaskysub import update_progress, skysub_single_image, skysub_single_imagestack, \
+        find_eigenimages, build_reference_stack
+    # Make a list of all images in the dataset, excluding any "cal" images:
+    if skip_list == False:
+        os.system('ls '+path+'0*.fit > list')
+    # Open the list:
+    with open('list') as f:
+        ims = f.read().splitlines()
+    # Build reference stack for each dither position:
+    # Skyframes have "Beam" = 0
+    sky0_stack = build_reference_stack(skyframepath)
+    Z0 = find_eigenimages(sky0_stack[0], K_klip = K_klip)
+    # Open each image:
+    count = 0
+    print('Subtracting...')
+    for i in range(len(ims)):
+        #print('Subtracting ',ims[i])
+        image = fits.getdata(ims[i])
+        imhdr = fits.getheader(ims[i])
+        shape = image.shape
+        # Subtract opposite dither sky from image:
+        if len(shape) == 3:
+            skysub, sky = skysub_single_imagestack(ims[i], Z0, K_klip, shape[0])
+        elif len(shape) == 2:
+            skysub, sky = skysub_single_image(ims[i], Z0, K_klip)
+        # Replace known bad pixels with 0:
+        if len(shape) == 2:
+            skysub = badpixelsub(skysub, imhdr)
+        elif len(shape) == 3:
+            skysub = [badpixelsub(skysub[j], imhdr) for j in range(shape[0])]
+        # Append the image header.
+        imhdr['COMMENT'] = '    Sky subtracted and bad pixel corrected on '+time.strftime("%m/%d/%Y")+ ' By Logan A. Pearce'
+        if write_file == True:
+            # Write sky subtracted image to file.
+            fits.writeto(str(ims[i]).split('.')[0]+'_skysub.fit',skysub,imhdr,overwrite=True)
+        else:
+            return skysub, imhdr
+        count+=1
+        update_progress(count,len(ims))
+    print('Done.')
+
 
