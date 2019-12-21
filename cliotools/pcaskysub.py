@@ -27,6 +27,9 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
         --------
             sky0_stack, sky1_stack : Nx512x1024 array
                 stack of reference images.
+            K_klip : int
+                if N < requested number of modes, return new value of K_klip where K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
+                otherwise returns requested number of modes.
     '''
     import numpy as np
     from astropy.io import fits
@@ -94,10 +97,10 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
     if sky0_stack.shape[0] < K_klip or sky1_stack.shape[0] < K_klip:
         print('Oops, there are fewer images than your requested number of modes.  Using all the images \
              in the reference set')
-        K_klip = np.min(sky1_stack.shape[0],sky0_stack.shape[0])
+        K_klip = np.min([sky1_stack.shape[0],sky0_stack.shape[0]])
         print('K_klip =',K_klip)
         
-    return sky0_stack, sky1_stack
+    return sky0_stack, sky1_stack, K_klip
 
 def find_eigenimages(array, K_klip = 10):
     ''' Build a set (of size K_klip) of basis modes from the inputted reference images.
@@ -415,7 +418,7 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
     with open('list') as f:
         ims = f.read().splitlines()
     # Build reference stack for each dither position:
-    sky0_stack, sky1_stack = build_reference_stack(path)
+    sky0_stack, sky1_stack, K_klip = build_reference_stack(path, K_klip = K_klip)
     Z0 = find_eigenimages(sky0_stack, K_klip = K_klip)
     Z1 = find_eigenimages(sky1_stack, K_klip = K_klip)
     # Open each image:
