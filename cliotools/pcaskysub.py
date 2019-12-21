@@ -279,6 +279,7 @@ def skysub_single_imagestack(filename, Z, K_klip, numstack):
     """
     from astropy.io import fits
     from cliotools.pcaskysub import build_estimator, sky_subtract
+    import numpy as np
     T = fits.getdata(filename)
     sky = np.array([build_estimator(T[i], Z, K_klip = K_klip) for i in range(numstack)])
     skysub = np.array([sky_subtract(T[i], sky[i]) for i in range(numstack)])
