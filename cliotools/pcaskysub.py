@@ -439,7 +439,10 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
             elif len(shape) == 2:
                 skysub, sky = skysub_single_image(ims[i], Z0, K_klip)
         # Replace known bad pixels with 0:
-        skysub = badpixelsub(skysub, imhdr)
+        if len(shape) == 2:
+            skysub = badpixelsub(skysub, imhdr)
+        elif len(shape) == 3:
+            skysub = [badpixelsub(skysub[j], imhdr) for j in range(shape[0])]
         # Append the image header.
         imhdr['COMMENT'] = '    Sky subtracted and bad pixel corrected on '+time.strftime("%m/%d/%Y")+ ' By Logan A. Pearce'
         if write_file == True:
