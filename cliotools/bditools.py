@@ -22,14 +22,15 @@ def findstars(imstamp, scienceimage_filename, xca, yca, xcb, ycb, boxsizex = 60,
     import numpy as np
     
     # Open science target image:
-    #file2 = 'BDI0933/BDI0933__00098_skysub.fit'
     image2 = fits.getdata(scienceimage_filename)
+    if len(image2.shape) == 3:
+        image2 = image2[0]
     image2 = ndimage.median_filter(image2, 3)
     # Use cross-correlation to find int(y,x) of star A (brightest star) in image:
     corr = signal.correlate2d(image2, imstamp, boundary='symm', mode='same')
     y, x = np.unravel_index(np.argmax(corr), corr.shape)
     # Define the star finder parameters:
-    daofind = DAOStarFinder(fwhm=8.0, threshold=1e4) 
+    daofind = DAOStarFinder(fwhm=12.0, threshold=1e4) 
     # Find sub-pixel location of star A in science image by using DAOStarFinder on a postagestamp centered at
     # cross-correlation x,y position results:
     sources = daofind(image2[np.int_(y-boxsizey):np.int_(y+boxsizey),np.int_(x-boxsizex):np.int_(x+boxsizex)])
@@ -92,7 +93,7 @@ def findstars_in_dataset(dataset_path, xca, yca, xcb, ycb, boxsizex = 60, boxsiz
     import numpy as np
     # Supress warnings when failing to find point sources
     import warnings
-    warnings.filterwarnings("ignore")
+    #warnings.filterwarnings("ignore")
     # Make a file to store results:
     newfile = dataset_path.split('/')[0]+'/ABlocations'
     if append_file == False:
@@ -107,6 +108,8 @@ def findstars_in_dataset(dataset_path, xca, yca, xcb, ycb, boxsizex = 60, boxsiz
         ims = f.read().splitlines()
     # Open initial image in dataset:
     image = fits.getdata(ims[0])
+    if len(image.shape) == 3:
+        image = image[0]
     # Apply median filter to smooth bad pixels:
     image = ndimage.median_filter(image, 3)
     # Create referance stamp from initial image of A:

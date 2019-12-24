@@ -66,12 +66,12 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
             # If its nod 0:
             if imhdr['BEAM'] == 0:
                 # Stack the image cube into one array
-                sky0_stack[count0:count0+shape[0],:,:] = image
+                sky0_stack[count0:count0+image.shape[0],:,:] = image
                 count0 += shape[0]
             # If its nod 1:
             if imhdr['BEAM'] == 1:
                 # Stack the image cube into one array
-                sky1_stack[count1:count1+shape[0],:,:] = image
+                sky1_stack[count1:count1+image.shape[0],:,:] = image
                 count1 += shape[0]  
         
     elif len(shape) == 2:
@@ -458,7 +458,7 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
     print('Done.')
 
 def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
-        """Skysubtract an entire dataset using sky frames rather than opposite nods.
+    """Skysubtract an entire dataset using sky frames rather than opposite nods.
        Parameters:
        -----------
        path : str
