@@ -30,6 +30,8 @@ def findstars(imstamp, scienceimage_filename, xca, yca, xcb, ycb, boxsizex = 60,
     corr = signal.correlate2d(image2, imstamp, boundary='symm', mode='same')
     y, x = np.unravel_index(np.argmax(corr), corr.shape)
     # Define the star finder parameters:
+    # The settings fwhm = 12.0 threshold = 1e4 are best for distinguishing good psf
+    # from bad psf, by trial and error.
     daofind = DAOStarFinder(fwhm=12.0, threshold=1e4) 
     # Find sub-pixel location of star A in science image by using DAOStarFinder on a postagestamp centered at
     # cross-correlation x,y position results:
