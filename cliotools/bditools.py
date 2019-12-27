@@ -1,4 +1,4 @@
-def findstars(imstamp, scienceimage_filename, xca, yca, boxsizex = 100, boxsizey = 100, threshold = 1e4):
+def findstars(imstamp, scienceimage_filename, xca, yca, boxsizex = 100, boxsizey = 100, threshold = 1e4, radius = 20):
     """Find the subpixel location of stars A and B in a single clio BDI image.
        Parameters:
        -----------
@@ -50,7 +50,6 @@ def findstars(imstamp, scienceimage_filename, xca, yca, boxsizex = 100, boxsizey
     xca_subpix, yca_subpix = (x-boxsizex+sources['xcentroid'])[0], (y-boxsizey+sources['ycentroid'])[0]
     
     # Make a mask around the brightest star on the cross-correlation image:
-    radius = 20
     # Make a meshgrid of the image centered at star A:
     xx,yy = np.meshgrid(np.arange(image2.shape[1])-xca_subpix,np.arange(image2.shape[0])-yca_subpix)
     # Make an array of the distances of each pixel from that center:
@@ -84,16 +83,20 @@ def findstars(imstamp, scienceimage_filename, xca, yca, boxsizex = 100, boxsizey
         xcb_subpix, ycb_subpix = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
     except:
         try:
-            daofind = DAOStarFinder(fwhm=10.0, threshold=5e3) 
+            threshold=1e3
+            daofind = DAOStarFinder(fwhm=10.0, threshold=threshold) 
             sources = daofind(image2[np.int_(ymin):np.int_(ymax),\
                                          np.int_(xmin):np.int_(xmax)])
             xcb_subpix, ycb_subpix = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
+            print('threshold =',threshold)
         except:
             try:
-                daofind = DAOStarFinder(fwhm=10.0, threshold=1e3) 
+                threshold=5e2
+                daofind = DAOStarFinder(fwhm=10.0, threshold=threshold) 
                 sources = daofind(image2[np.int_(ymin):np.int_(ymax),\
                                              np.int_(xmin):np.int_(xmax)])
                 xcb_subpix, ycb_subpix = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
+                print('threshold =',threshold)
             except:
                 print('I just cant find it, it might be too faint or not there.')
 
@@ -107,7 +110,7 @@ def findstars(imstamp, scienceimage_filename, xca, yca, boxsizex = 100, boxsizey
     return xca_subpix, yca_subpix, xcb_subpix, ycb_subpix
 
 def findstars_in_dataset(dataset_path, xca, yca, corrboxsizex = 40, corrboxsizey = 40, boxsizex = 100, boxsizey = 100, skip_list = False, \
-                         append_file = False):
+                         append_file = False, threshold = 1e4, radius = 20):
     """Find the subpixel location of stars A and B in a clio BDI dataset.
        Parameters:
        -----------
@@ -128,6 +131,8 @@ def findstars_in_dataset(dataset_path, xca, yca, corrboxsizex = 40, corrboxsizey
         append_file : bool
             Set to True to append to an existing locations file, False to make a new file or 
             overwrite an old one.  Defautl = False.
+        threshold : flt
+            threshold for finding stars using DAOStarFinder
 
        Returns:
        --------
@@ -169,7 +174,8 @@ def findstars_in_dataset(dataset_path, xca, yca, corrboxsizex = 40, corrboxsizey
         try:
             xca_subpix, yca_subpix, xcb_subpix, ycb_subpix = findstars(imstamp, im, \
                                                            xca, yca, \
-                                                           boxsizex = boxsizex, boxsizey = boxsizey)
+                                                           boxsizex = boxsizex, boxsizey = boxsizey, threshold = threshold, \
+                                                           radius = radius)
             if count % 25 == 0:
                 xca, yca, xcb, ycb = xca_subpix, yca_subpix, xcb_subpix, ycb_subpix
             string = im + ' ' + str(xca_subpix)+' '+str(yca_subpix)+' '+str(xcb_subpix)+' '+str(ycb_subpix)
