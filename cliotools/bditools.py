@@ -236,4 +236,5 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
         count+=1
         update_progress(count,len(ims))
     print('Done')
+    os.system('rm list')
     os.system("say 'done'")
