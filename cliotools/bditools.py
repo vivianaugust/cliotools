@@ -90,6 +90,7 @@ def findstars(imstamp, scienceimage_filename, nstars, \
     """Find the subpixel location of all stars in a single clio BDI image using DAOStarFinder 
        (https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html).
        Written by Logan A. Pearce, 2020
+       Dependencies: numpy, astropy, scipy, photutils
 
        Parameters:
        -----------
@@ -157,6 +158,8 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
                          append_file = False, threshold = 1e4, radius = 20, fwhm = 10):
     """Find the subpixel location of stars A and B in a clio BDI dataset.
        Written by Logan A. Pearce, 2020
+       Dependencies: numpy, astropy, scipy, photutils
+
        Parameters:
        -----------
        dataset_path : string

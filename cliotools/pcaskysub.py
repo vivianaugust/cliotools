@@ -385,6 +385,7 @@ def badpixelsub(image, imhdr, nan = False):
 def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
     """Skysubtract an entire dataset
        Written by Logan A. Pearce, 2019
+       Dependencies: numpy, astropy
 
        Parameters:
        -----------
@@ -470,6 +471,7 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
 def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
     """Skysubtract an entire dataset using sky frames rather than opposite nods.
        Written by Logan A. Pearce, 2019
+       Dependencies: numpy, astropy
 
        Parameters:
        -----------
