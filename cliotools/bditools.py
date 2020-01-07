@@ -32,12 +32,12 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10)
     # Correct for sources near image edge:
     if ymin < 0:
         ymin = 0
-    if ymax > 512:
-        ymax = 512
+    if ymax > scienceimage.shape[1]:
+        ymax = scienceimage.shape[1]
     if xmin < 0:
         xmin = 0
-    if xmax > 1024:
-        xmax = 1024
+    if xmax > scienceimage.shape[0]:
+        xmax = scienceimage.shape[0]
     # Use DAOStarFinder to find subpixel locations:
     # If the threshold is too high and it can't find a point source, lower the threshold
     # until ~ 5e2, then declare failure.
