@@ -1,5 +1,7 @@
 def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10):
     """Find the subpixel location of a single star in a single clio BDI image.
+       Written by Logan A. Pearce, 2020
+
        Parameters:
        -----------
        image : 2d array
@@ -87,6 +89,7 @@ def findstars(imstamp, scienceimage_filename, nstars, \
               boxsize = 100, threshold = 1e4, fwhm = 10, radius = 20):
     """Find the subpixel location of all stars in a single clio BDI image using DAOStarFinder 
        (https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html).
+       Written by Logan A. Pearce, 2020
 
        Parameters:
        -----------
@@ -153,6 +156,7 @@ def findstars(imstamp, scienceimage_filename, nstars, \
 def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corrboxsizey = 40, boxsize = 100, skip_list = False, \
                          append_file = False, threshold = 1e4, radius = 20, fwhm = 10):
     """Find the subpixel location of stars A and B in a clio BDI dataset.
+       Written by Logan A. Pearce, 2020
        Parameters:
        -----------
        dataset_path : string

@@ -12,6 +12,7 @@ def beam_count(ims):
 
 def build_reference_stack(path, skip_list=False, K_klip = 10):
     '''Stack reference images into Nx512x1024 array for Nod 0 and Nod 1.
+       Written by Logan A. Pearce, 2019
     
         Parameters:
         -----------
@@ -105,6 +106,7 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
 def find_eigenimages(array, K_klip = 10):
     ''' Build a set (of size K_klip) of basis modes from the inputted reference images.
     Based on math in Soummer+ 2012 section 2.
+       Written by Logan A. Pearce, 2019
     
     Parameters:
     -----------
@@ -170,8 +172,9 @@ def find_eigenimages(array, K_klip = 10):
 
 def build_estimator(T, Z,  K_klip = 10, numbasis = None):
     """ Build the estimated psf/sky by projecting the science
-    target onto the basis modes.
-    Based on math in Soummer 2012 section 4.
+       target onto the basis modes.
+       Based on math in Soummer 2012 section 4.
+       Written by Logan A. Pearce, 2019
     
     Parameters:
     -----------
@@ -262,6 +265,8 @@ def skysub_single_image(filename, Z, K_klip):
 
 def skysub_single_imagestack(filename, Z, K_klip, numstack):
     """Skysubtract a single clio imagestack (numstack x m x n)
+       Written by Logan A. Pearce, 2019
+
        Parameters:
        -----------
        Filename : str
@@ -318,6 +323,8 @@ def update_progress(n,max_value):
 
 def badpixelsub(image, imhdr, nan = False):
     """Replace known bad pixels with 0 or nan
+       Written by Logan A. Pearce, 2019
+
        Parameters:
        -----------
        image : 2d array
@@ -377,6 +384,8 @@ def badpixelsub(image, imhdr, nan = False):
 
 def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
     """Skysubtract an entire dataset
+       Written by Logan A. Pearce, 2019
+
        Parameters:
        -----------
        path : str
@@ -455,10 +464,13 @@ def clio_skysubtract(path, K_klip=5, skip_list = False, write_file = True, badpi
             return skysub, imhdr
         count+=1
         update_progress(count,len(ims))
+    os.system('rm list')
     print('Done.')
 
 def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False, write_file = True, badpixelreplace = True):
     """Skysubtract an entire dataset using sky frames rather than opposite nods.
+       Written by Logan A. Pearce, 2019
+
        Parameters:
        -----------
        path : str
@@ -535,5 +547,6 @@ def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False,
         count+=1
         update_progress(count,len(ims))
     print('Done.')
+    os.system('rm list')
 
 
