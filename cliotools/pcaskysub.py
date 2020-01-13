@@ -1,3 +1,7 @@
+import numpy as np
+from astropy.io import fits
+import os
+
 def beam_count(ims):
     '''Count the number of images in a dataset in each dither'''
     from astropy.io import fits
@@ -32,9 +36,6 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
                 if N < requested number of modes, return new value of K_klip where K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
                 otherwise returns requested number of modes.
     '''
-    import numpy as np
-    from astropy.io import fits
-    import os
     # Make a list of all images in the dataset:
     if skip_list == False:
         os.system('ls '+path+'0*.fit > list')
@@ -140,14 +141,12 @@ def find_eigenimages(array, K_klip = 10):
     
     # compute covariance matrix of reference images:
     cov = np.cov(R)
-    time2 = time.time()
     
     # compute eigenvalues (lambda) and corresponding eigenvectors (c)
     # of covariance matrix.  Compute only the eigenvalues/vectors up to the
     # desired number of bases K_klip.
     N = shape[0]
     lamb,c = eigh(cov, eigvals = (N-K_klip,N-1))
-    time3 = time.time()
     
     # np.cov returns eigenvalues/vectors in increasing order, so
     # we need to reverse the order:

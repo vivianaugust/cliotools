@@ -1,3 +1,11 @@
+from astropy.io import fits
+import numpy as np
+import os
+from scipy import ndimage
+import image_registration
+
+############################ Finding stars in CLIO images ################################
+
 def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10):
     """Find the subpixel location of a single star in a single clio BDI image.
        Written by Logan A. Pearce, 2020
@@ -5,7 +13,7 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10)
        Parameters:
        -----------
        image : 2d array
-           boxsizex by boxsizey substamp image of a reference psf for cross correlation
+           boxsize by boxsize substamp image of a reference psf for cross correlation
        scienceimage_filename : string
            path to science image
        x, y : int
@@ -23,7 +31,6 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10)
            subpixel location of star
     """
     from photutils import DAOStarFinder
-    import numpy as np
     image2 = scienceimage
     # The settings fwhm = 10.0 seems to be good for clio
     # Define box around source B:
@@ -114,10 +121,9 @@ def findstars(imstamp, scienceimage_filename, nstars, \
        x_subpix, y_subpix : arr,flt
            1 x nstars array of subpixel x location and y location of stars
     """
-    from scipy import signal, ndimage
+    from scipy import signal
     from photutils import DAOStarFinder
-    from astropy.io import fits
-    import numpy as np
+    
     # Open science target image:
     image = fits.getdata(scienceimage_filename)
     # If image is a cube, take the first image:
@@ -188,10 +194,7 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
            image_filename   x   y   x   y   ...ect. for all requested stars.
     """
     from scipy import ndimage
-    from astropy.io import fits
-    import os
     from cliotools.pcaskysub import update_progress
-    import numpy as np
     # Supress warnings when failing to find point sources
     import warnings
     warnings.filterwarnings("ignore")
@@ -245,3 +248,231 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
     print('Done')
     os.system('rm list')
     os.system("say 'done'")
+
+################################ prepare images for KLIP ##################################################
+
+def rotate_clio(image, imhdr, **kwargs):
+    """Rotate CLIO image to north up east left.
+       Written by Logan A. Pearce, 2020
+       
+       Dependencies: scipy
+
+       Parameters:
+       -----------
+       image : 2d array
+           2d image array
+       imhdr : fits header object
+           header for image to be rotated
+       kwargs : for scipy.ndimage
+           
+       Returns:
+       --------
+       imrot : 2d arr 
+           rotated image with north up east left
+    """
+    
+    NORTH_CLIO = -1.80
+    derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
+    imrot = ndimage.rotate(image, derot, **kwargs)
+    return imrot
+
+def ab_stack_shift(k, boxsize = 20, path_prefix=''):
+    """Prepare stacks for BDI/ADI by stacking and subpixel aligning image 
+       postage stamps of star A and star B.
+       Written by Logan A. Pearce, 2020
+       
+       Dependencies: astropy, image_registration, scipy
+
+       Parameters:
+       -----------
+       k : Pandas array
+           Pandas array made from the output of bditools.findstars_in_dataset.  
+           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb']
+       boxsize : int
+           size of box to draw around star psfs for DAOStarFinder
+       path_prefix : int
+           string to put in front of filenames in input file in case the relative
+           location of files has changed
+           
+       Returns:
+       --------
+       astamp, bstamp : 3d arr 
+           stack of aligned psf's of star A and B for BDI.
+    """
+    import warnings
+    warnings.filterwarnings("ignore")
+    
+    # Open first image in dataset:
+    i = 0
+    # Make stamps:
+    first_a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+                   np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
+    first_b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+                   np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
+    
+    # create empty containers:
+    astamp = np.zeros([len(k),*first_a.shape])
+    bstamp = np.zeros([len(k),*first_b.shape])
+    # place roated image at bottom of stack:
+    astamp[i,:,:] = first_a
+    bstamp[i,:,:] = first_b
+    
+    # For each subsequent image, make the imagestamp for a and b, rotate, and 
+    # align them with the first image, and add to stack:
+    for i in range(1,len(k)):
+        # make stamp:
+        a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+                   np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
+        # place in container:
+        try:
+            astamp[i,:,:] = a
+            # measure offset from the first image stamp:
+            dx,dy,edx,edy = image_registration.chi2_shift(astamp[0,:,:], astamp[i,:,:], upsample_factor='auto')
+            # shift new stamp by that amount:
+            astamp[i,:,:] = ndimage.shift(astamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
+                                              cval=0.0, prefilter=True)
+        except:
+            print('oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+            astamp = astamp[:i,:,:]
+            bstamp = bstamp[:i,:,:]
+            return astamp, bstamp
+        # repeat for b:
+        b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+                   np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
+        try:
+            bstamp[i,:,:] = b
+            # measure offset from the first image stamp:
+            dx,dy,edx,edy = image_registration.chi2_shift(bstamp[0,:,:], bstamp[i,:,:], upsample_factor='auto')
+            # shift new stamp by that amount:
+            bstamp[i,:,:] = ndimage.shift(bstamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
+                              cval=0.0, prefilter=True)
+        except:
+            print('oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+            astamp = astamp[:i,:,:]
+            bstamp = bstamp[:i,:,:]
+            return astamp, bstamp
+        
+    return astamp, bstamp
+
+############################# KLIP math #############################################################
+
+def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_estimator = False):
+    """Build an estimator for the psf of a BDI science target image from a cube of reference psfs 
+       (use the ab_stack_shift function).  Follows steps of Soummer+ 2012 sec 2.2
+       
+       Written by Logan A. Pearce, 2020
+       Heavily influenced by the lovely coding over at PyKLIP (https://pyklip.readthedocs.io/en/latest/)
+       
+       Dependencies: numpy, image_registration, scipy
+
+       Parameters:
+       -----------
+       scienceimage : 2d array
+           science target image of shape mxn
+       ref_psfs : 3d array
+           reference psfs array of shape Nxmxn where N = number of reference psfs
+       K_klip : int or arr
+           Number of basis modes desired to use.  Can be integer or array of len b
+       covariances : arr
+           covariance matrix for ref psfs can be passed as an argument to avoid needing
+           to calculate it
+       return_estimator : bool
+           if set to True, return the estimated psf(s) used to subtract from the science target
+           
+       Returns:
+       --------
+       outputimage : bxmxn arr
+           psf subtracted image
+       Ihat : bxmxn arr
+           psf estimator (if return_estimator = True)
+
+    """
+    # Shift science image to line up with reference psfs (aligned during the cubing step):
+    dx,dy,edx,edy = image_registration.chi2_shift(np.sum(ref_psfs,axis=0), scienceimage, upsample_factor='auto')
+    scienceimage = ndimage.shift(scienceimage, [-dy,-dx], output=None, order=4, mode='constant', \
+                              cval=0.0, prefilter=True)
+    # Start KLIP math:
+    from scipy.linalg import eigh
+    # Soummer 2012 2.2.1:
+    ### Prepare science target:
+    shape=scienceimage.shape
+    p = shape[0]*shape[1]
+    # Reshape science target into 1xp array:
+    T_reshape = np.reshape(scienceimage,(p))
+    # Subtract mean from science image:
+    T_meansub = T_reshape - np.nanmean(T_reshape)
+    # Make K_klip number of copies of science image
+    # to use fast vectorized math:
+    T_meansub = np.tile(T_meansub, (np.max(K_klip), 1))
+    ### Prepare ref psfs:
+    refshape=ref_psfs.shape
+    N = refshape[0]
+    if N < np.min(K_klip):
+        print("Oops! All of your requested basis modes are more than there are ref psfs.")
+        print("Setting K_klip to number of ref psfs.  K_klip = ",N)
+        K_klip = N
+    if N < np.max(K_klip):
+        print("Oops! You've requested more basis modes than there are ref psfs.")
+        print("Setting where K_klip > N to number of ref psfs.")
+        K_klip[np.where(K_klip > N)] = N
+        print("K_klip = ",K_klip)
+    K_klip = np.clip(K_klip, 0, N)
+    R = np.reshape(ref_psfs,(N,p))
+    # Compute the mean pixel value of each reference image:
+    immean = np.nanmean(R, axis=1)
+    # subtract mean:
+    R_meansub = R - immean[:, None] #<- makes an empty first dimension to make
+    # the vector math work out
+    
+    # Soummer 2.2.2:
+    # compute covariance matrix of reference images:
+    if covariances is None:
+        cov = np.cov(R_meansub)
+    else:
+        cov = covariances
+    # compute eigenvalues (lambda) and corresponding eigenvectors (c)
+    # of covariance matrix.  Compute only the eigenvalues/vectors up to the
+    # desired number of bases K_klip.
+    lamb,c = eigh(cov, eigvals = (N-np.max(K_klip),N-1))
+    # np.cov returns eigenvalues/vectors in increasing order, so
+    # we need to reverse the order:
+    index = np.flip(np.argsort(lamb))
+    # sort corresponding eigenvalues:
+    lamb = lamb[index]
+    # check for any negative eigenvalues:
+    check_nans = np.any(lamb <= 0)
+    # sort eigenvectors in order of descending eigenvalues:
+    c = c.T
+    c = c[index]
+    # np.cov normalizes the covariance matrix by N-1.  We have to correct
+    # for that because it's not in the Soummer 2012 equation:
+    lamb = lamb * (p-1)
+    # Take the dot product of the reference image with corresponding eigenvector:
+    Z = np.dot(R.T, c.T)
+    # Multiply by 1/sqrt(eigenvalue):
+    Z = Z * np.sqrt(1/lamb)
+    
+    # Soummer 2.2.4
+    # Project science target onto KL Basis:
+    projection_sci_onto_basis = np.dot(T_meansub,Z)
+    # This produces a (K_klip,K_klip) sized array of identical
+    # rows of the projected science target.  We only need one row:
+    projection_sci_onto_basis = projection_sci_onto_basis[0]
+    # This fancy math let's you use fewer modes to subtract:
+    lower_triangular = np.tril(np.ones([np.max(K_klip), np.max(K_klip)]))
+    projection_sci_onto_basis_tril = projection_sci_onto_basis * lower_triangular
+    # Create the final psf estimator by multiplying by the basis modes:
+    Ihat = np.dot(projection_sci_onto_basis_tril[K_klip-1,:], Z.T)
+    
+    # Soummer 2.2.5
+    # Truncate the science image to the different number of requested modes to use:
+    outputimage = T_meansub[:np.size(K_klip),:]
+    # Subtract estimated psf from science image:
+    outputimage = outputimage - Ihat
+    # Reshape to 
+    outputimage = np.reshape(outputimage, (np.size(K_klip),*shape))
+    
+    if return_estimator:
+        return outputimage, np.reshape(Ihat, (np.size(K_klip),*shape))
+    else:
+        return outputimage
