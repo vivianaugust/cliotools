@@ -332,7 +332,7 @@ def ab_stack_shift(k, boxsize = 20, path_prefix=''):
             astamp[i,:,:] = ndimage.shift(astamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
                                               cval=0.0, prefilter=True)
         except:
-            print('oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+            print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
             astamp = astamp[:i,:,:]
             bstamp = bstamp[:i,:,:]
             return astamp, bstamp
@@ -347,16 +347,41 @@ def ab_stack_shift(k, boxsize = 20, path_prefix=''):
             bstamp[i,:,:] = ndimage.shift(bstamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
                               cval=0.0, prefilter=True)
         except:
-            print('oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+            print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
             astamp = astamp[:i,:,:]
             bstamp = bstamp[:i,:,:]
             return astamp, bstamp
         
     return astamp, bstamp
 
+def psfsub_cube_header(dataset, K_klip, star, shape):
+    """ Make a header for writing psf sub BDI KLIP cubes to fits files
+        in the subtract_cubes function
+    """
+    import time
+    header = fits.Header()
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = '         **  BDI KLIP PSF subtraction cube **'
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = 'Postagestamp cube of PSF subtraction using KLIP algorithm and BDI method'
+    try:
+        header['NAXIS1'] = str(shape[1])
+        header['NAXIS2'] = str(shape[2])
+        header['NAXIS3'] = str(shape[0])
+    except:
+        header['NAXIS1'] = str(shape[0])
+        header['NAXIS2'] = str(shape[1])
+        header['NAXIS3'] = str(1)
+    header['DATE'] = time.strftime("%m/%d/%Y")
+    header['DATASET'] = dataset
+    header['STAR'] = str(star)
+    header['BASIS MODE CUTOFFS'] = str(K_klip)
+    header['COMMENT'] = 'by Logan A Pearce'
+    return header
+
 ############################# KLIP math #############################################################
 
-def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_estimator = False):
+def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis = False, basis = None, return_basis = False, return_cov = False):
     """Build an estimator for the psf of a BDI science target image from a cube of reference psfs 
        (use the ab_stack_shift function).  Follows steps of Soummer+ 2012 sec 2.2
        
@@ -376,6 +401,9 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_esti
        covariances : arr
            covariance matrix for ref psfs can be passed as an argument to avoid needing
            to calculate it
+       basis : 3d arr
+           psf basis modes (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
+           to calculate it
        return_estimator : bool
            if set to True, return the estimated psf(s) used to subtract from the science target
            
@@ -383,8 +411,11 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_esti
        --------
        outputimage : bxmxn arr
            psf subtracted image
-       Ihat : bxmxn arr
-           psf estimator (if return_estimator = True)
+       Z : Nxp arr
+           psf model basis modes (if return_basis = True)
+       cov : NxN arr
+           return the computed covariance matrix is return_cov = True. So it can be used in future
+           calcs without having to recalculate
 
     """
     # Shift science image to line up with reference psfs (aligned during the cubing step):
@@ -393,6 +424,7 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_esti
                               cval=0.0, prefilter=True)
     # Start KLIP math:
     from scipy.linalg import eigh
+    
     # Soummer 2012 2.2.1:
     ### Prepare science target:
     shape=scienceimage.shape
@@ -404,54 +436,60 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_esti
     # Make K_klip number of copies of science image
     # to use fast vectorized math:
     T_meansub = np.tile(T_meansub, (np.max(K_klip), 1))
-    ### Prepare ref psfs:
-    refshape=ref_psfs.shape
-    N = refshape[0]
-    if N < np.min(K_klip):
-        print("Oops! All of your requested basis modes are more than there are ref psfs.")
-        print("Setting K_klip to number of ref psfs.  K_klip = ",N)
-        K_klip = N
-    if N < np.max(K_klip):
-        print("Oops! You've requested more basis modes than there are ref psfs.")
-        print("Setting where K_klip > N to number of ref psfs.")
-        K_klip[np.where(K_klip > N)] = N
-        print("K_klip = ",K_klip)
-    K_klip = np.clip(K_klip, 0, N)
-    R = np.reshape(ref_psfs,(N,p))
-    # Compute the mean pixel value of each reference image:
-    immean = np.nanmean(R, axis=1)
-    # subtract mean:
-    R_meansub = R - immean[:, None] #<- makes an empty first dimension to make
-    # the vector math work out
     
-    # Soummer 2.2.2:
-    # compute covariance matrix of reference images:
-    if covariances is None:
-        cov = np.cov(R_meansub)
+    # KL Basis modes:
+    if use_basis is True:
+        Z = basis
     else:
-        cov = covariances
-    # compute eigenvalues (lambda) and corresponding eigenvectors (c)
-    # of covariance matrix.  Compute only the eigenvalues/vectors up to the
-    # desired number of bases K_klip.
-    lamb,c = eigh(cov, eigvals = (N-np.max(K_klip),N-1))
-    # np.cov returns eigenvalues/vectors in increasing order, so
-    # we need to reverse the order:
-    index = np.flip(np.argsort(lamb))
-    # sort corresponding eigenvalues:
-    lamb = lamb[index]
-    # check for any negative eigenvalues:
-    check_nans = np.any(lamb <= 0)
-    # sort eigenvectors in order of descending eigenvalues:
-    c = c.T
-    c = c[index]
-    # np.cov normalizes the covariance matrix by N-1.  We have to correct
-    # for that because it's not in the Soummer 2012 equation:
-    lamb = lamb * (p-1)
-    # Take the dot product of the reference image with corresponding eigenvector:
-    Z = np.dot(R.T, c.T)
-    # Multiply by 1/sqrt(eigenvalue):
-    Z = Z * np.sqrt(1/lamb)
+        # Build basis modes:
+        ### Prepare ref psfs:
+        refshape=ref_psfs.shape
+        N = refshape[0]
+        if N < np.min(K_klip):
+            print("Oops! All of your requested basis modes are more than there are ref psfs.")
+            print("Setting K_klip to number of ref psfs.  K_klip = ",N)
+            K_klip = N
+        if N < np.max(K_klip):
+            print("Oops! You've requested more basis modes than there are ref psfs.")
+            print("Setting where K_klip > N to number of ref psfs.")
+            K_klip[np.where(K_klip > N)] = N
+            print("K_klip = ",K_klip)
+        K_klip = np.clip(K_klip, 0, N)
+        R = np.reshape(ref_psfs,(N,p))
+        # Compute the mean pixel value of each reference image:
+        immean = np.nanmean(R, axis=1)
+        # subtract mean:
+        R_meansub = R - immean[:, None] #<- makes an empty first dimension to make
+        # the vector math work out
     
+        # Soummer 2.2.2:
+        # compute covariance matrix of reference images:
+        if covariances is None:
+            cov = np.cov(R_meansub)
+        else:
+            cov = covariances
+        # compute eigenvalues (lambda) and corresponding eigenvectors (c)
+        # of covariance matrix.  Compute only the eigenvalues/vectors up to the
+        # desired number of bases K_klip.
+        lamb,c = eigh(cov, eigvals = (N-np.max(K_klip),N-1))
+        # np.cov returns eigenvalues/vectors in increasing order, so
+        # we need to reverse the order:
+        index = np.flip(np.argsort(lamb))
+        # sort corresponding eigenvalues:
+        lamb = lamb[index]
+        # check for any negative eigenvalues:
+        check_nans = np.any(lamb <= 0)
+        # sort eigenvectors in order of descending eigenvalues:
+        c = c.T
+        c = c[index]
+        # np.cov normalizes the covariance matrix by N-1.  We have to correct
+        # for that because it's not in the Soummer 2012 equation:
+        lamb = lamb * (p-1)
+        # Take the dot product of the reference image with corresponding eigenvector:
+        Z = np.dot(R.T, c.T)
+        # Multiply by 1/sqrt(eigenvalue):
+        Z = Z * np.sqrt(1/lamb)
+
     # Soummer 2.2.4
     # Project science target onto KL Basis:
     projection_sci_onto_basis = np.dot(T_meansub,Z)
@@ -471,8 +509,120 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, return_esti
     outputimage = outputimage - Ihat
     # Reshape to 
     outputimage = np.reshape(outputimage, (np.size(K_klip),*shape))
-    
-    if return_estimator:
-        return outputimage, np.reshape(Ihat, (np.size(K_klip),*shape))
+
+    if (return_cov and return_basis) is True:
+        return outputimage, Z, cov
+    elif return_basis:
+        return outputimage, Z
+    elif return_cov:
+        return outputimage, cov
     else:
         return outputimage
+
+def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
+                   b_covariances=None, a_estimator=None, b_estimator=None, \
+                   write_to_disk = True, write_directory = '.'):
+    """For each image in the astamp/bstamp cubes, PSF subtract image, rotate to
+       north up/east left; then median combine all images for star A and star B into
+       single reduced image.  Do this for an array of KLIP mode cutoff values.  Writes
+       reduced images to disk in fits cube with z axis = # of KLIP mode cutoff values.
+
+       Written by Logan A. Pearce, 2020
+       Dependencies: numpy, astropy.io.fits
+
+       Parameters:
+       -----------
+       acube, bcube : 3d array
+           cube of postage stamp images of star A and star B, array of shape Nxmxn 
+           where N = number of images in dataset (or truncated cube if boxsize prevents 
+           using every image).  Output of ab_stack_shift function.
+       K_klip : int or arr
+           Number of basis modes desired to use.  Can be integer or array of len b
+       k : Pandas array
+           Pandas array made from the output of bditools.findstars_in_dataset.  
+           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb']. Same Pandas array used in
+           the ab_stack_shift function.
+       a_covariances, b_covariances : arr
+           covariance matrix for ref psfs for star A or B can be passed as an argument to avoid needing
+           to calculate it
+       a_estimator, b_estimator : 2d arr
+           psf model (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
+           to calculate it
+       write_to_disk : bool
+           when set to True, output arrays will be written to fits files in the specified directory. 
+           Default = True
+       write_directory : str
+           directory to write fits cubes of output files.
+           
+       Returns:
+       --------
+       a_final, b_final : 3d arr
+           cube of psf subtracted and median combined postagestamp images
+           of star A and B, with z = # of KLIP mode cutoff values.
+           If write_to_disk = True the cubes are written to fits files with
+           custom headers with filename of system and suffix "_klipcube_a.fits" 
+           and "_klipcube_b.fits"
+
+    """
+    from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract
+
+    N = astamp.shape[0]
+    if N < np.max(K_klip):
+        print("Oops! You've requested more basis modes than there are ref psfs.")
+        print("Setting where K_klip > N to number of ref psfs.")
+        K_klip[np.where(K_klip > N)] = N
+        print("K_klip = ",K_klip)
+    # measure the final product image dimensions by performing rotation
+    # on first image in cube:
+    imhdr = fits.getheader(k['filename'][0])
+    a0_rot = rotate_clio(astamp[0], imhdr, order = 4, reshape = True)
+    a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
+    b_final = np.zeros(a_final.shape)
+    # For each KL mode cutoff value:
+    for j in range(np.size(K_klip)):
+        ############### star A: ##################
+        # for a single K_klip value and a single star A:
+        print('Subtracting using KL basis mode cutoff K_klip =',K_klip[j])
+        # Use the first science image to create basis modes for psf model from star B:
+        i = 0
+        Fa, Zb = psf_subtract(astamp[i], bstamp, K_klip[j], return_basis = True)
+        # get header and rotate image:
+        imhdr = fits.getheader(k['filename'][i])
+        Fa_rot = rotate_clio(Fa[0], imhdr, order = 4, reshape = True)
+        # make a cube to store results:
+        a = np.zeros([astamp.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
+        # Place the psf subtracted image into the container cube:
+        a[i,:,:] = Fa_rot
+        # Use this basis to subtract all the remaining A images:
+        for i in range(1,a.shape[0]):
+            # subtract:
+            F2a  = psf_subtract(astamp[i], bstamp, K_klip[j], use_basis = True, basis = Zb)
+            # rotate:
+            F2a_rot = rotate_clio(F2a[0], imhdr, order = 4, reshape = True)
+            # store:
+            a[i,:,:] = F2a_rot
+        # final product is combination of subtracted and rotated images:
+        a_final[j,:,:] = np.median(a, axis = 0)
+        
+        ############### star B: ##################
+        # Repeat for star B:
+        i = 0
+        Fb, Za = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True)
+        Fb_rot = rotate_clio(Fb[0], imhdr, order = 4, reshape = True)
+        b = np.zeros(a.shape)
+        b[i,:,:] = Fb_rot
+        for i in range(1,b.shape[0]):
+            # subtract:
+            F2b  = psf_subtract(bstamp[i], astamp, K_klip[j], use_basis = True, basis = Za)
+            # rotate:
+            F2b_rot = rotate_clio(F2b[0], imhdr, order = 4, reshape = True)
+            # store:
+            b[i,:,:] = F2b_rot
+        b_final[j,:,:] = np.median(b, axis = 0)
+    print('Writing finished cubes to file... done!')
+    if write_to_disk is True:
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape)
+        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_a.fit',a_final,newhdr,overwrite=True)
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape)
+        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b.fit',a_final,newhdr,overwrite=True)
+    return a_final, b_final
