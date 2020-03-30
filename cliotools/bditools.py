@@ -39,12 +39,12 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10)
     # Correct for sources near image edge:
     if ymin < 0:
         ymin = 0
-    if ymax > scienceimage.shape[1]:
-        ymax = scienceimage.shape[1]
+    if ymax > scienceimage.shape[0]:
+        ymax = scienceimage.shape[0]
     if xmin < 0:
         xmin = 0
-    if xmax > scienceimage.shape[0]:
-        xmax = scienceimage.shape[0]
+    if xmax > scienceimage.shape[1]:
+        xmax = scienceimage.shape[1]
     # Use DAOStarFinder to find subpixel locations:
     # If the threshold is too high and it can't find a point source, lower the threshold
     # until ~ 5e2, then declare failure.
@@ -199,7 +199,7 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
     import warnings
     warnings.filterwarnings("ignore")
     # Make a file to store results:
-    newfile = dataset_path.split('/')[0]+'/StarLocations'
+    newfile = dataset_path.split('/')[0]+'/ABLocations'
     
     if append_file == False:
         string = '#     '
@@ -304,57 +304,95 @@ def ab_stack_shift(k, boxsize = 20, path_prefix=''):
     
     # Open first image in dataset:
     i = 0
+    image = fits.getdata(path_prefix+k['filename'][i])
     # Make stamps:
-    first_a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
-                   np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
-    first_b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
-                   np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
-    
+    if len(image.shape) == 2:
+        first_a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+                                                                 np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
+        first_b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+                                                                 np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
+    elif len(image.shape) == 3:
+        first_a = fits.getdata(path_prefix+k['filename'][i])[:,np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+                                                                 np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
+        first_b = fits.getdata(path_prefix+k['filename'][i])[:,np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+                                                                 np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
     # create empty containers:
-    astamp = np.zeros([len(k),*first_a.shape])
-    bstamp = np.zeros([len(k),*first_b.shape])
-    # place roated image at bottom of stack:
-    astamp[i,:,:] = first_a
-    bstamp[i,:,:] = first_b
+    if len(image.shape) == 2:
+        astamp = np.zeros([len(k),*first_a.shape])
+        bstamp = np.zeros([len(k),*first_b.shape])
+    elif len(image.shape) == 3:
+        astamp = np.zeros([len(k)*image.shape[0],first_a.shape[1],first_a.shape[2]])
+        bstamp = np.zeros([len(k)*image.shape[0],first_b.shape[1],first_b.shape[2]])
     
-    # For each subsequent image, make the imagestamp for a and b, rotate, and 
+    # For each subsequent image, make the imagestamp for a and b, and 
     # align them with the first image, and add to stack:
-    for i in range(1,len(k)):
+    if len(image.shape) == 2:
+        # place first a at bottom of stack:
+        i = 0
+        astamp[i,:,:] = first_a
+        bstamp[i,:,:] = first_b
+        for i in range(1,len(k)):
         # make stamp:
-        a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+            a = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
                    np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
-        # place in container:
-        try:
-            astamp[i,:,:] = a
-            # measure offset from the first image stamp:
-            dx,dy,edx,edy = image_registration.chi2_shift(astamp[0,:,:], astamp[i,:,:], upsample_factor='auto')
-            # shift new stamp by that amount:
-            astamp[i,:,:] = ndimage.shift(astamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
+            # place in container:
+            try:
+                astamp[i,:,:] = a
+                # measure offset from the first image stamp:
+                dx,dy,edx,edy = image_registration.chi2_shift(astamp[0,:,:], astamp[i,:,:], upsample_factor='auto')
+                # shift new stamp by that amount:
+                astamp[i,:,:] = ndimage.shift(astamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
                                               cval=0.0, prefilter=True)
-        except:
-            print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
-            astamp = astamp[:i,:,:]
-            bstamp = bstamp[:i,:,:]
-            return astamp, bstamp
-        # repeat for b:
-        b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+            except:
+                print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+                astamp = astamp[:i,:,:]
+                bstamp = bstamp[:i,:,:]
+                return astamp, bstamp
+            # repeat for b:
+            b = fits.getdata(path_prefix+k['filename'][i])[np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
                    np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
-        try:
-            bstamp[i,:,:] = b
-            # measure offset from the first image stamp:
-            dx,dy,edx,edy = image_registration.chi2_shift(bstamp[0,:,:], bstamp[i,:,:], upsample_factor='auto')
-            # shift new stamp by that amount:
-            bstamp[i,:,:] = ndimage.shift(bstamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
+            try:
+                bstamp[i,:,:] = b
+                # measure offset from the first image stamp:
+                dx,dy,edx,edy = image_registration.chi2_shift(bstamp[0,:,:], bstamp[i,:,:], upsample_factor='auto')
+                # shift new stamp by that amount:
+                bstamp[i,:,:] = ndimage.shift(bstamp[i,:,:], [-dy,-dx], output=None, order=3, mode='constant', \
                               cval=0.0, prefilter=True)
-        except:
-            print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
-            astamp = astamp[:i,:,:]
-            bstamp = bstamp[:i,:,:]
-            return astamp, bstamp
-        
+            except:
+                print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+                astamp = astamp[:i,:,:]
+                bstamp = bstamp[:i,:,:]
+                return astamp, bstamp
+    if len(image.shape) == 3:
+        count = first_a.shape[0]
+        astamp[0:count,:,:] = first_a
+        bstamp[0:count,:,:] = first_b
+        for i in range(1,len(k)):
+            try:
+                a = fits.getdata(path_prefix+k['filename'][i])[:,np.int_(k['yca'][i]-boxsize):np.int_(k['yca'][i]+boxsize),\
+                                                                   np.int_(k['xca'][i]-boxsize):np.int_(k['xca'][i]+boxsize)]
+                astamp[count:count+a.shape[0],:,:] = a
+                b = fits.getdata(path_prefix+k['filename'][i])[:,np.int_(k['ycb'][i]-boxsize):np.int_(k['ycb'][i]+boxsize),\
+                                                                   np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
+                bstamp[count:count+b.shape[0],:,:] = b
+                   
+                for j in range(count,count+a.shape[0]):
+                    dx,dy,edx,edy = image_registration.chi2_shift(astamp[0,:,:], astamp[j,:,:], upsample_factor='auto')
+                    astamp[j,:,:] = ndimage.shift(astamp[j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
+                                                              prefilter=True)
+                    dx,dy,edx,edy = image_registration.chi2_shift(bstamp[0,:,:], bstamp[j,:,:], upsample_factor='auto')
+                    bstamp[j,:,:] = ndimage.shift(bstamp[j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
+                                                              prefilter=True)
+                count += a.shape[0]
+            except:
+                print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',count)
+                astamp = astamp[:count,:,:]
+                bstamp = bstamp[:count,:,:]
+                return astamp, bstamp
+            
     return astamp, bstamp
 
-def psfsub_cube_header(dataset, K_klip, star, shape):
+def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
     """ Make a header for writing psf sub BDI KLIP cubes to fits files
         in the subtract_cubes function
     """
@@ -376,6 +414,7 @@ def psfsub_cube_header(dataset, K_klip, star, shape):
     header['DATASET'] = dataset
     header['STAR'] = str(star)
     header['BASIS MODE CUTOFFS'] = str(K_klip)
+    header['STAMPAXIS'] = str(stampshape)
     header['COMMENT'] = 'by Logan A Pearce'
     return header
 
@@ -511,7 +550,7 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
     outputimage = np.reshape(outputimage, (np.size(K_klip),*shape))
 
     if (return_cov and return_basis) is True:
-        return outputimage, Z, cov
+        return outputimage, Z, cov, lamb, c
     elif return_basis:
         return outputimage, Z
     elif return_cov:
@@ -521,7 +560,7 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
 
 def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
                    b_covariances=None, a_estimator=None, b_estimator=None, \
-                   write_to_disk = True, write_directory = '.'):
+                   write_to_disk = True, write_directory = '.', outfilesuffix = ''):
     """For each image in the astamp/bstamp cubes, PSF subtract image, rotate to
        north up/east left; then median combine all images for star A and star B into
        single reduced image.  Do this for an array of KLIP mode cutoff values.  Writes
@@ -553,11 +592,14 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
            Default = True
        write_directory : str
            directory to write fits cubes of output files.
+       outfilesuffix : str
+           optional suffix to end of output cube filename.  For example, note that the boxsize used for a
+           a reduction was 100 pixels by setting outfilesuffix = box100, filename will be dataset_klipcube_a_box100.fit
            
        Returns:
        --------
        a_final, b_final : 3d arr
-           cube of psf subtracted and median combined postagestamp images
+           cube of psf subtracted and sigma-clipped mean combined postagestamp images
            of star A and B, with z = # of KLIP mode cutoff values.
            If write_to_disk = True the cubes are written to fits files with
            custom headers with filename of system and suffix "_klipcube_a.fits" 
@@ -565,6 +607,7 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
 
     """
     from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract
+    from astropy.stats import sigma_clip
 
     N = astamp.shape[0]
     if N < np.max(K_klip):
@@ -577,7 +620,10 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
     imhdr = fits.getheader(k['filename'][0])
     a0_rot = rotate_clio(astamp[0], imhdr, order = 4, reshape = True)
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
+    a_final_median = np.zeros(a_final.shape)
     b_final = np.zeros(a_final.shape)
+    b_final_median = np.zeros(a_final.shape)
+    
     # For each KL mode cutoff value:
     for j in range(np.size(K_klip)):
         ############### star A: ##################
@@ -602,7 +648,8 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
             # store:
             a[i,:,:] = F2a_rot
         # final product is combination of subtracted and rotated images:
-        a_final[j,:,:] = np.median(a, axis = 0)
+        a_final_median[j,:,:] = np.median(a, axis = 0)
+        a_final[j,:,:] = np.mean(sigma_clip(a, sigma = 3, axis = 0), axis = 0)
         
         ############### star B: ##################
         # Repeat for star B:
@@ -618,11 +665,22 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
             F2b_rot = rotate_clio(F2b[0], imhdr, order = 4, reshape = True)
             # store:
             b[i,:,:] = F2b_rot
-        b_final[j,:,:] = np.median(b, axis = 0)
+        b_final_median[j,:,:] = np.median(b, axis = 0)
+        b_final[j,:,:] = np.mean(sigma_clip(b, sigma = 3, axis = 0), axis = 0)
     print('Writing finished cubes to file... done!')
     if write_to_disk is True:
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape)
-        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_a.fit',a_final,newhdr,overwrite=True)
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape)
-        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b.fit',a_final,newhdr,overwrite=True)
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape, astamp.shape[1])
+        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_a'+outfilesuffix+'.fit',a_final,newhdr,overwrite=True)
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape, bstamp.shape[1])
+        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b'+outfilesuffix+'.fit',b_final,newhdr,overwrite=True)
     return a_final, b_final
+
+'''
+def do_bdi(k, K_klip, **kwargs):
+    """Wrapper function for BDI psf subtraction functions
+    """
+    from cliotools.bditools import ab_stack_shift, subtract_cubes
+    # create postage stamp cubes:
+    astamp, bstamp = ab_stack_shift(k, **kwargs)
+    # psf subtract cubes
+    a_final, b_final = subtract_cubes(astamp, bstamp, K_klip, k, **kwargs)'''
