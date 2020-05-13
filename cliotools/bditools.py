@@ -431,6 +431,61 @@ def ab_stack_shift(k, boxsize = 20, path_prefix='', verbose = True):
             
     return astamp, bstamp
 
+def normalize_cubes(astack,bstack, normalizebymask = False,  radius = []):
+    '''
+       Parameters:
+       ----------
+       astack, bstack : 3d array
+           cube of unnormalized images
+       normalizebymask : bool
+           if True, normalize using only the pixels in a specified radius to normalize.  Default = False
+       radius : bool
+           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
+           
+       Returns:
+       --------
+       acube, bcube : 3d arr
+           cube of normalized images
+    '''
+    a,b = astack.copy(),bstack.copy()
+    for i in range(astack.shape[0]):
+        # for star A:
+        data = astack
+        if normalizebymask:
+            from photutils import CircularAperture
+            r = lod_to_pixels(5., 3.9)/2
+            positions = (astamp.shape[1]/2,astamp.shape[2]/2)
+            aperture = CircularAperture(positions, r=radius)
+            # Turn it into a mask:
+            aperture_masks = aperture.to_mask(method='center')
+            # pull out just the data in the mask:
+            aperture_data = aperture_masks.multiply(data[i])
+            aperture_data[np.where(aperture_data == 0)] = np.nan
+            summed = np.nansum(aperture_data)
+        else:
+            # get the sum of pixels in the mask:
+            summed = np.sum(data[i])
+            # normalize to that sum:
+            a[i] = data[i] / summed
+        # repeat for B:
+        data = bstack
+        if normalizebymask:
+            from photutils import CircularAperture
+            r = lod_to_pixels(5., 3.9)/2
+            positions = (astamp.shape[1]/2,astamp.shape[2]/2)
+            aperture = CircularAperture(positions, r=radius)
+            # Turn it into a mask:
+            aperture_masks = aperture.to_mask(method='center')
+            # pull out just the data in the mask:
+            aperture_data = aperture_masks.multiply(data[i])
+            aperture_data[np.where(aperture_data == 0)] = np.nan
+            summed = np.nansum(aperture_data)
+        else:
+            # get the sum of pixels in the mask:
+            summed = np.sum(data[i])
+            b[i] = data[i] / summed
+    return a,b
+                
 def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
     """ Make a header for writing psf sub BDI KLIP cubes to fits files
         in the subtract_cubes function
@@ -610,7 +665,7 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
         return outputimage
 
 ###################### Perform KLIP on a science target to search for companions #######################
-def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
+def subtract_cubes(astack, bstack, K_klip, k, a_covariances=None, \
                    b_covariances=None, a_estimator=None, b_estimator=None, \
                    write_to_disk = True, write_directory = '.', outfilesuffix = '', \
                    headercomment = None, reshape = False, verbose = True, normalize = True,
@@ -626,7 +681,7 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
 
        Parameters:
        -----------
-       acube, bcube : 3d array
+       astack, bstack : 3d array
            cube of unnormalized postage stamp images of star A and star B, array of shape Nxmxn 
            where N = number of images in dataset (or truncated cube if boxsize prevents 
            using every image).  Output of ab_stack_shift function.
@@ -677,50 +732,16 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
            and "_klipcube_b.fits"
 
     """
-    from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract
+    from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract, normalize_cubes
     from astropy.stats import sigma_clip
+    
     if normalize:
-        # Normalize the integrated flux in each image by dividing the image by the sum
-        # of pixels in the image:
-        #For each image:
-        for i in range(astamp.shape[0]):
-            # for star A:
-            data = astamp
-            if normalizebymask:
-                from photutils import CircularAperture
-                r = lod_to_pixels(5., 3.9)/2
-                positions = (astamp.shape[1]/2,astamp.shape[2]/2)
-                aperture = CircularAperture(positions, r=radius)
-                # Turn it into a mask:
-                aperture_masks = aperture.to_mask(method='center')
-                # pull out just the data in the mask:
-                aperture_data = aperture_masks.multiply(data[i])
-                aperture_data[np.where(aperture_data == 0)] = np.nan
-                summed = np.nansum(aperture_data)
-            else:
-                # get the sum of pixels in the mask:
-                summed = np.sum(data[i])
-                # normalize to that sum:
-                astamp[i] = data[i] / summed
-            # repeat for B:
-            data = bstamp
-            if normalizebymask:
-                from photutils import CircularAperture
-                r = lod_to_pixels(5., 3.9)/2
-                positions = (astamp.shape[1]/2,astamp.shape[2]/2)
-                aperture = CircularAperture(positions, r=radius)
-                # Turn it into a mask:
-                aperture_masks = aperture.to_mask(method='center')
-                # pull out just the data in the mask:
-                aperture_data = aperture_masks.multiply(data[i])
-                aperture_data[np.where(aperture_data == 0)] = np.nan
-                summed = np.nansum(aperture_data)
-            else:
-                # get the sum of pixels in the mask:
-                summed = np.sum(data[i])
-                bstamp[i] = data[i] / summed
+        # Normalize cubes:
+        acube,bcube = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = radius)
+    elif normalize == False:
+        acube,bcube = astack.copy(),bstack.copy()
 
-    N = astamp.shape[0]
+    N = astack.shape[0]
     if N < np.max(K_klip):
         if verbose:
             print("Oops! You've requested more basis modes than there are ref psfs.")
@@ -731,7 +752,7 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
     # measure the final product image dimensions by performing rotation
     # on first image in cube:
     imhdr = fits.getheader(k['filename'][0])
-    a0_rot = rotate_clio(astamp[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
+    a0_rot = rotate_clio(acube[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
     b_final = np.zeros(a_final.shape)
     
@@ -744,18 +765,18 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
         # Use the first science image to create basis modes for psf model from star B:
         i = 0
         #Fa, Zb = psf_subtract(astamp[i], bstamp, K_klip[j], return_basis = True, verbose = verbose)
-        Fa, Zb, immeanb = psf_subtract(astamp[i], bstamp, K_klip[j], return_basis = True, verbose = verbose)
+        Fa, Zb, immeanb = psf_subtract(acube[i], bcube, K_klip[j], return_basis = True, verbose = verbose)
         # get header and rotate image:
         imhdr = fits.getheader(k['filename'][i])
         Fa_rot = rotate_clio(Fa[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
         # make a cube to store results:
-        a = np.zeros([astamp.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
+        a = np.zeros([acube.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
         # Place the psf subtracted image into the container cube:
         a[i,:,:] = Fa_rot
         # Use this basis to subtract all the remaining A images:
         for i in range(1,a.shape[0]):
             # subtract:
-            F2a  = psf_subtract(astamp[i], bstamp, K_klip[j], use_basis = True, basis = Zb, mean_image = immeanb, verbose = verbose)
+            F2a  = psf_subtract(acube[i], bcube, K_klip[j], use_basis = True, basis = Zb, mean_image = immeanb, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
             F2a_rot = rotate_clio(F2a[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
@@ -769,13 +790,13 @@ def subtract_cubes(astamp, bstamp, K_klip, k, a_covariances=None, \
         # Repeat for star B:
         i = 0
         #Fb, Za = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True, verbose = verbose)
-        Fb, Za, immeana = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True, verbose = verbose)
+        Fb, Za, immeana = psf_subtract(bcube[i], acube, K_klip[j], return_basis = True, verbose = verbose)
         Fb_rot = rotate_clio(Fb[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
         b = np.zeros(a.shape)
         b[i,:,:] = Fb_rot
         for i in range(1,b.shape[0]):
             # subtract:
-            F2b  = psf_subtract(bstamp[i], astamp, K_klip[j], use_basis = True, basis = Za, mean_image = immeana, verbose = verbose)
+            F2b  = psf_subtract(bcube[i], acube, K_klip[j], use_basis = True, basis = Za, mean_image = immeana, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
             F2b_rot = rotate_clio(F2b[0], imhdr, order = 4, reshape =reshape, mode='constant', cval=np.nan)
@@ -1043,7 +1064,9 @@ def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, **kwarg
 def DoInjection(path, Star, K_klip, sep, pa, C, 
                 sepformat = None, box = 100, 
                 template = [], TC = None, verbose = True, 
-                returnZ = False, Z = [], immean = [], returnstamps = False, sciencecube = [], refcube = []):
+                returnZ = False, Z = [], immean = [], returnstamps = False, sciencecube = [], refcube = [],
+                normalize = True, normalizebymask = False,  radius = []
+                    ):
     ''' Inject fake planet signal into images of Star 1 using Star 2 as template (or user
         supplied template) in all images in a dataset, and perform KLIP reduction and psf subtraction
         Parameters:
@@ -1077,6 +1100,21 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             option to supply a basis set and skip computing step.  Useful if performing
             multiple operations on the same dataset.  You can compute Z only once and return it,
             then supply it for further calculations
+        immean : 2d arr
+            mean image for basis set used in Z
+        returnstamps : bool
+            if True, return image stamps.  Useful to toggle on and off to avoid having to stack and shift
+            images base every time you test a new injected planet, which takes time.  Default = False
+        sciencecub, refcube : 3d arr
+            user input the base images to use in injection.  Typically will be the output of a previous
+            DoInjection run where returnstamps=True
+        normalize : bool
+           if True, normalize each image science and reference image integrated flux by dividing by each image
+           by the sum of all pixels in image.  If False do not normalize images. Default = True
+        normalizebymask : bool
+           if True, normalize using only the pixels in a specified radius to normalize.  Default = False
+        radius : bool
+           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
     '''
     from cliotools.bditools import psf_subtract
     k = pd.read_csv(path+'CleanList', comment='#')
@@ -1084,6 +1122,8 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
         from cliotools.bditools import ab_stack_shift
         box = 100
         astamp, bstamp = ab_stack_shift(k, boxsize = box, verbose = True)
+        if normalize:
+            astamp,bstamp = normalize_cubes(astamp,bstamp, normalizebymask = normalizebymask,  radius = radius)
         if Star == 'A':
             sciencecube = astamp
             refcube = bstamp
@@ -1134,7 +1174,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             print('mean image needed if using extenally computed basis set')
         # rotate:
         imhdr = fits.getheader(k['filename'][i])
-        Frot = rotate_clio(F[0], imhdr, order = 4, reshape = False)
+        Frot = rotate_clio(F[0], imhdr, order = 4, reshape = False, mode='constant', cval=np.nan)
         klipcube[i,:,:] = Frot
     from astropy.stats import sigma_clip
     kliped = np.mean(sigma_clip(klipcube, sigma = 3, axis = 0), axis = 0)
