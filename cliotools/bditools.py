@@ -382,7 +382,7 @@ def ab_stack_shift(k, boxsize = 20, path_prefix='', verbose = True,
                                               cval=0.0, prefilter=True)
             except:
                 if verbose:
-                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+                    print('PrepareCubes: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
                 astamp = astamp[:i,:,:]
                 bstamp = bstamp[:i,:,:]
                 return astamp, bstamp
@@ -628,10 +628,21 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
            
        Returns:
        --------
+        if (return_cov and return_basis) is True:
+            return outputimage, Z, immean, cov, lamb, c
+        elif return_basis:
+            return outputimage, Z, immean
+        elif return_cov:
+            return outputimage, cov
+        else:
+            return outputimage
+
        outputimage : bxmxn arr
            psf subtracted image
        Z : Nxp arr
            psf model basis modes (if return_basis = True)
+       immean : mxn arr
+           mean image that accompanies basis set Z (if return_basis = True)
        cov : NxN arr
            return the computed covariance matrix is return_cov = True. So it can be used in future
            calcs without having to recalculate
@@ -914,7 +925,7 @@ def do_bdi(k, K_klip, **kwargs):
 ##########################################################################
 #  Functions for injecting synthetic planet signals                      #
 
-def mag(image, x, y, radius = 9., r_in = 10., r_out = 12., returnflux = False, returntable = False):
+def mag(image, x, y, radius = 9., returnflux = False, returntable = False):
     ''' Compute instrument magnitudes of one object.  Defaults are set to CLIO 3.9um optimal.
         Parameters:
         -----------
@@ -941,36 +952,17 @@ def mag(image, x, y, radius = 9., r_in = 10., r_out = 12., returnflux = False, r
     from photutils import CircularAperture, CircularAnnulus, aperture_photometry
     # Position of star:
     positions = [(x,y)]
-    # Use radius equal to the firsl null, 1 lamb/d ~ 8.7 pixels:
-    radius = 9.
     # Get sum of all pixel values within radius of center:
-    apertures = CircularAperture(positions, r=radius)
-    # Get sum of all pixels in annulus around center to sample background:
-    annulus_apertures = CircularAnnulus(positions, r_in=10., r_out=12.)
-    # Put into list:
-    apers = [apertures, annulus_apertures]
-    # Do photometry on star and background:
-    phot_table = aperture_photometry(image, apers)
-    # Background mean:
-    bkg_mean = phot_table['aperture_sum_1'] / annulus_apertures.area
-    # Backgroud within star aperture:
-    bkg_sum = bkg_mean * apertures.area
-    # Subtract background from star flux:
-    final_sum = phot_table['aperture_sum_0'] - bkg_sum 
-    # Add column to table with this final flux
-    phot_table['Final_aperture_flux'] = final_sum  
-    # Put into instrument magnitudes:
-    m =(-2.5)*np.log10(phot_table['Final_aperture_flux'][0])
-    # noise = sum(sqrt(signal) + sqrt(bkgd in aperture))
-    noise = np.sqrt(final_sum[0]) + np.sqrt(bkg_sum[0])
-    # Compute snr:
-    snr = final_sum[0] / noise
+    aperture = CircularAperture(positions, r=radius)
+    # Do photometry on star:
+    phot_table = aperture_photometry(image, aperture)
+    m =(-2.5)*np.log10(phot_table['aperture_sum'][0])
     if returnflux:
-        return m, final_sum[0]
+        return m, phot_table['aperture_sum'][0]
     if returntable:
         phot_table['Mag'] = m
         return m, phot_table
-    return m, snr
+    return m
 
 def contrast(image1,image2,pos1,pos2,**kwargs):
     ''' Return contrast of component B relative to A in magnitudes
@@ -993,8 +985,8 @@ def contrast(image1,image2,pos1,pos2,**kwargs):
         
     '''
     from cliotools.bditools import mag
-    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)[0]
-    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)[0]
+    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)
+    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)
     return mag2 - mag1
 
 def makeplanet(template, C, TC):
@@ -1014,7 +1006,7 @@ def makeplanet(template, C, TC):
     '''
     # Amount of magnitudes to scale template by to achieve desired
     # contrast with science target:
-    D = C + TC
+    D = C - TC
     # Convert to flux:
     scalefactor = 10**(-D/2.5)
     # Scale template pixel values:
@@ -1218,10 +1210,10 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             register the images only once.
     '''
     from cliotools.bditools import psf_subtract
+    k = pd.read_csv(path+'CleanList', comment='#')
     # First, if cubes aren't provided, build up the science and reference cubes
     # from the provided directory and prepare them for KLIP:
     if not len(sciencecube):
-        k = pd.read_csv(path+'CleanList', comment='#')
         from cliotools.bditools import PrepareCubes
         # Collect and register the science images, but do no
         # normalize or mask yet, that must be done after signal injection:
@@ -1244,7 +1236,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             # Get template constrast of refcube to sciencecube
             TC = contrast(sciencecube[i],refcube[i],[box+0.5,box+0.5],[box+0.5,box+0.5])
             # image header must be provided to 
-            # accomodate roation from north up reference got PA to image reference:
+            # accomodate rotation from north up reference got PA to image reference:
             imhdr = fits.getheader(k['filename'][i]) 
             # Inject the desired signal into the science cube:
             synth = injectplanets(sciencecube[i], imhdr, refcube[i], sep, pa, C, TC, box, box, 
@@ -1308,44 +1300,163 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
         return kliped, Z
     return kliped
 
-def getsnr(image, sep, pa, xc, yc):
+def getsnr(image, sep, pa, xc, yc, wavelength = 3.9):
+    ''' Get SNR of injected planet signal using method and Student's T-test
+        statistics described in Mawet 2014
+        Parameters:
+        -----------
+        image : 2d arr
+            KLIP reduced image with injected planet signal at (sep,pa)
+        sep : flt
+            separation of injected signal in L/D units
+        pa : flt
+            position angle of inject signal relative to north in degrees
+        xc, yc : flt or int
+            (x,y) pixel location of center of star
+        wavelength : flt
+            central wavelength in microns of image filter. Used for converting 
+            from L/D units to pixels.  Default = 3.9
+            
+    '''
     from cliotools.cliotools import lod_to_pixels
-    radius = lod_to_pixels(1., 3.9)/2
+    from photutils import CircularAperture, aperture_photometry
+    radius = lod_to_pixels(1., wavelength)/2
     lod = 2*radius
-    #xc,yc = box-1,box-1
-    seppix = lod_to_pixels(sep, 3.9)
+    # convert sep in L/D to pixels:
+    seppix = lod_to_pixels(sep, wavelength)
     # Number of 1L/D apertures that can fit on the circumference at separation:
     Napers = np.floor(sep*2*np.pi)
-    # Change in angle from one aper to the next:
+    # Change in angle from center of one aper to the next:
     dTheta = 360/Napers
-
     # Create array around circumference, excluding the ones immediately before and after
     # where the planet is:
     pas = np.arange(pa+2*dTheta,pa+360-dTheta,dTheta)%360
+    # create emptry container to store results:
     noisesums = np.zeros(len(pas))
-
+    # for each noise aperture:
     for i in range(len(pas)):
+        # lay down a photometric aperture at that point:
         xx = seppix*np.sin(np.radians((pas[i])))
         yy = seppix*np.cos(np.radians((pas[i])))
         xp,yp = xc-xx,yc+yy
         aperture = CircularAperture([xp,yp], r=radius)
+        # sum pixels in aperture:
         phot = aperture_photometry(image, aperture)
+        # add to noise container:
         noisesums[i] = phot['aperture_sum'][0]
+    # the noise value is the std dev of pixel sums in each
+    # noise aperture:
     noise = np.std(noisesums)
-    xc,yc = box-1,box-1
-    seppix = lod_to_pixels(sep, 3.9)
+    # Compute signal of injected planet in signal aperture:
     xx = seppix*np.sin(np.radians((pa)))
     yy = seppix*np.cos(np.radians((pa)))
     xp,yp = xc-xx,yc+yy
+    # Lay down aperture at planet location:
     aperture = CircularAperture([xp,yp], r=radius)
+    # compute pixel sum in that location:
     phot = aperture_photometry(image, aperture)
     signal = phot['aperture_sum'][0]
+    # compute mean background:
     bkgd = np.mean(noisesums)
     # Eqn 9 in Mawet 2014:
     signal = signal - bkgd
     snr = signal / ( noise * np.sqrt(1+ (1/np.size(pas))) )
     return snr
 
+def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returnsnrs = False, writeklip = True,
+         **kwargs):
+    ''' For a given separation and contrast of an injected planet signal around Star A/B, 
+        compute the SNR using the method in Mawet 2014.  kwargs are fed to DoInjection
+
+        Parameters:
+        -----------
+        path : str
+            dataset folder
+        Star : 'A' or 'B'
+            star to put the fake signal around
+        K_klip : int
+            number of KLIP modes to use in psf subtraction
+        sep : flt or fltarr
+            separation of planet placement in either arcsec, mas, pixels, or lambda/D
+        C : flt or fltarr
+            desired contrast of planet with central object
+        sepformat : str
+            format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
+            Default = 'lambda/D'
+        box : int
+            size of box of size "2box x 2box" for image stamps
+        returnsnrs : bool
+            if True, return both the mean SNR and the array of SNRs for each aperture
+            in the ring.
+        writeklip : bool
+            if True, write a fits image of the KLIP-reduced image of the first injected
+            planet signal into the directory specified in "path".
+            
+        Returns:
+        --------
+        snr : flt
+            mean SNR for all apertures of size L/D in ring at r=sep
+        snrs : flt arr
+            if returnsnrs = True, return array of SNR in each aperture in the ring.  snrs[0]
+            is for aperture at pa=270 deg, and indices proceed counterclockwise from there.
+    '''
+    from cliotools.pcaskysub import update_progress
+    from cliotools.bditools import DoInjection, getsnr
+    # Define starting point pa:
+    pa = 270.
+    # define center of box (location of star):
+    xc,yc = box-1,box-1
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    pas = np.arange(pa+2*dTheta,pa+360-dTheta,dTheta)%360
+    # create empty container to store results:
+    snrs = np.zeros(len(pas))
+    
+    # Do initial run on 1st pa location to create stamps and KLIP basis set:
+    kliped, Z, immean, astamp, bstamp = DoInjection(path, Star, K_klip, sep, pa, C, 
+                    sepformat = sepformat, box = box, 
+                    verbose = True, returnZ = True, returnstamps = True, **kwargs)
+    if writeklip:
+        from astropy.io import fits
+        name = path+'/injectedsignal_star'+Star+'_sep'+str(sep)+'_C'+str(C)+'.fit'
+        fits.writeto(name,kliped.data,overwrite=True)
+    # compute SNR for first injected location:
+    s = getsnr(kliped, sep, pa, xc, yc)
+    # place in container
+    snrs[0] = s
+    # Update progress:
+    update_progress(0+1,len(pas))
+    
+    if Star == 'A':
+        sciencecube = astamp.copy()
+        refcube = bstamp.copy()
+    elif Star == 'B':
+        sciencecube = bstamp.copy()
+        refcube = astamp.copy()
+    
+    # Repeat for all apertures in the ring:
+    for i in range(1,len(pas)):
+        # Speed up by skipping calculation of basis and making cubes
+        kliped = DoInjection(path, Star, K_klip, sep, pas[i], C, 
+                             sepformat = sepformat, box = box, 
+                             verbose = False, returnZ = False, 
+                             # Use previously computed basis set and mean imageL
+                             Z = Z, immean = immean,
+                             # Use previously made data cubes:
+                             sciencecube = sciencecube, refcube = refcube, **kwargs)
+        # compute and store SNR:
+        snr = getsnr(kliped, sep, pas[i], xc, yc)
+        snrs[i] = snr
+        update_progress(i+1,len(pas))
+        
+    if returnsnrs:
+        return np.mean(snrs), snrs
+        
+    return np.mean(snrs)
 
 ##########################################################################
 #              DEPRECATED                                                #

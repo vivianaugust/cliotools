@@ -628,10 +628,21 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
            
        Returns:
        --------
+        if (return_cov and return_basis) is True:
+            return outputimage, Z, immean, cov, lamb, c
+        elif return_basis:
+            return outputimage, Z, immean
+        elif return_cov:
+            return outputimage, cov
+        else:
+            return outputimage
+
        outputimage : bxmxn arr
            psf subtracted image
        Z : Nxp arr
            psf model basis modes (if return_basis = True)
+       immean : mxn arr
+           mean image that accompanies basis set Z (if return_basis = True)
        cov : NxN arr
            return the computed covariance matrix is return_cov = True. So it can be used in future
            calcs without having to recalculate
@@ -914,7 +925,7 @@ def do_bdi(k, K_klip, **kwargs):
 ##########################################################################
 #  Functions for injecting synthetic planet signals                      #
 
-def mag(image, x, y, radius = 9., r_in = 10., r_out = 12., returnflux = False, returntable = False):
+def mag(image, x, y, radius = 9., returnflux = False, returntable = False):
     ''' Compute instrument magnitudes of one object.  Defaults are set to CLIO 3.9um optimal.
         Parameters:
         -----------
@@ -941,36 +952,17 @@ def mag(image, x, y, radius = 9., r_in = 10., r_out = 12., returnflux = False, r
     from photutils import CircularAperture, CircularAnnulus, aperture_photometry
     # Position of star:
     positions = [(x,y)]
-    # Use radius equal to the firsl null, 1 lamb/d ~ 8.7 pixels:
-    radius = 9.
     # Get sum of all pixel values within radius of center:
-    apertures = CircularAperture(positions, r=radius)
-    # Get sum of all pixels in annulus around center to sample background:
-    annulus_apertures = CircularAnnulus(positions, r_in=10., r_out=12.)
-    # Put into list:
-    apers = [apertures, annulus_apertures]
-    # Do photometry on star and background:
-    phot_table = aperture_photometry(image, apers)
-    # Background mean:
-    bkg_mean = phot_table['aperture_sum_1'] / annulus_apertures.area
-    # Backgroud within star aperture:
-    bkg_sum = bkg_mean * apertures.area
-    # Subtract background from star flux:
-    final_sum = phot_table['aperture_sum_0'] - bkg_sum 
-    # Add column to table with this final flux
-    phot_table['Final_aperture_flux'] = final_sum  
-    # Put into instrument magnitudes:
-    m =(-2.5)*np.log10(phot_table['Final_aperture_flux'][0])
-    # noise = sum(sqrt(signal) + sqrt(bkgd in aperture))
-    noise = np.sqrt(final_sum[0]) + np.sqrt(bkg_sum[0])
-    # Compute snr:
-    snr = final_sum[0] / noise
+    aperture = CircularAperture(positions, r=radius)
+    # Do photometry on star:
+    phot_table = aperture_photometry(image, aperture)
+    m =(-2.5)*np.log10(phot_table['aperture_sum'][0])
     if returnflux:
-        return m, final_sum[0]
+        return m, phot_table['aperture_sum'][0]
     if returntable:
         phot_table['Mag'] = m
         return m, phot_table
-    return m, snr
+    return m
 
 def contrast(image1,image2,pos1,pos2,**kwargs):
     ''' Return contrast of component B relative to A in magnitudes
@@ -993,8 +985,8 @@ def contrast(image1,image2,pos1,pos2,**kwargs):
         
     '''
     from cliotools.bditools import mag
-    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)[0]
-    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)[0]
+    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)
+    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)
     return mag2 - mag1
 
 def makeplanet(template, C, TC):
@@ -1014,7 +1006,7 @@ def makeplanet(template, C, TC):
     '''
     # Amount of magnitudes to scale template by to achieve desired
     # contrast with science target:
-    D = C + TC
+    D = C - TC
     # Convert to flux:
     scalefactor = 10**(-D/2.5)
     # Scale template pixel values:
@@ -1218,10 +1210,10 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             register the images only once.
     '''
     from cliotools.bditools import psf_subtract
+    k = pd.read_csv(path+'CleanList', comment='#')
     # First, if cubes aren't provided, build up the science and reference cubes
     # from the provided directory and prepare them for KLIP:
     if not len(sciencecube):
-        k = pd.read_csv(path+'CleanList', comment='#')
         from cliotools.bditools import PrepareCubes
         # Collect and register the science images, but do no
         # normalize or mask yet, that must be done after signal injection:
@@ -1244,7 +1236,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             # Get template constrast of refcube to sciencecube
             TC = contrast(sciencecube[i],refcube[i],[box+0.5,box+0.5],[box+0.5,box+0.5])
             # image header must be provided to 
-            # accomodate roation from north up reference got PA to image reference:
+            # accomodate rotation from north up reference got PA to image reference:
             imhdr = fits.getheader(k['filename'][i]) 
             # Inject the desired signal into the science cube:
             synth = injectplanets(sciencecube[i], imhdr, refcube[i], sep, pa, C, TC, box, box, 
@@ -1310,6 +1302,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
 
 def getsnr(image, sep, pa, xc, yc):
     from cliotools.cliotools import lod_to_pixels
+    from photutils import CircularAperture, aperture_photometry
     radius = lod_to_pixels(1., 3.9)/2
     lod = 2*radius
     #xc,yc = box-1,box-1
@@ -1332,7 +1325,7 @@ def getsnr(image, sep, pa, xc, yc):
         phot = aperture_photometry(image, aperture)
         noisesums[i] = phot['aperture_sum'][0]
     noise = np.std(noisesums)
-    xc,yc = box-1,box-1
+    #xc,yc = box-1,box-1
     seppix = lod_to_pixels(sep, 3.9)
     xx = seppix*np.sin(np.radians((pa)))
     yy = seppix*np.cos(np.radians((pa)))
