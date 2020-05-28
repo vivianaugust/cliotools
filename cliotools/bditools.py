@@ -4,6 +4,8 @@ import os
 from scipy import ndimage
 import image_registration
 import pandas as pd
+import pickle
+import matplotlib.pyplot as plt
 
 def plot(image):
     import matplotlib.pyplot as plt
@@ -398,7 +400,7 @@ def ab_stack_shift(k, boxsize = 20, path_prefix='', verbose = True,
                               cval=0.0, prefilter=True)
             except:
                 if verbose:
-                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
+                    print('PrepareCubes: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',i)
                 astamp = astamp[:i,:,:]
                 bstamp = bstamp[:i,:,:]
                 return astamp, bstamp
@@ -435,7 +437,7 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
                      # normalizing parameters:\
                    normalize = True, normalizebymask = False,  normalize_radius = [],\
                    # star masking parameters:\
-                   mask_core = True, mask_radius = 1.,\
+                   mask_core = True, mask_radius = 1.\
                 ):
     ''' Assemble cubes of images and prepare them for KLIP reduction by: centering/subpixel-aligning images along
         vertical axis, normalizing images by dividing by sum of pixels in image, and masking the core of the central star.
@@ -850,6 +852,10 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
     b_final = np.zeros(a_final.shape)
     
+    # If single value of K_klip provided, make into array to prevent
+    # later issues:
+    if type(K_klip) == int:
+        K_klip = np.array([K_klip])
     # For each KL mode cutoff value:
     for j in range(np.size(K_klip)):
         ############### star A: ##################
@@ -902,11 +908,11 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     if write_to_disk is True:
         if verbose:
             print('Writing finished cubes to file... done!')
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape, astamp.shape[1])
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape, acube.shape[1])
         if headercomment:
             newhdr['COMMENT'] = headercomment
         fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_a'+outfilesuffix+'.fit',a_final,newhdr,overwrite=True)
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape, bstamp.shape[1])
+        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape, bcube.shape[1])
         if headercomment:
             newhdr['COMMENT'] = headercomment
         fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b'+outfilesuffix+'.fit',b_final,newhdr,overwrite=True)
@@ -965,7 +971,7 @@ def mag(image, x, y, radius = 9., returnflux = False, returntable = False):
     return m
 
 def contrast(image1,image2,pos1,pos2,**kwargs):
-    ''' Return contrast of component B relative to A in magnitudes
+    ''' Return contrast of component 2 relative to 1 in magnitudes
         Parameters:
         ------------
         image1 : 2d array
@@ -1014,7 +1020,7 @@ def makeplanet(template, C, TC):
     return Pflux
 
 def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc, 
-                 sepformat = 'pixels', 
+                 sepformat = 'lambda/D', 
                  pixscale = 15.9,
                  wavelength = 'none',
                  box = 70
@@ -1137,12 +1143,12 @@ def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, **kwarg
 ########### Perform KLIP on injected planet signals ##########################
 
 def DoInjection(path, Star, K_klip, sep, pa, C,
-                sepformat = None, box = 100, 
-                template = [], TC = None, verbose = True,
+                sepformat = 'lambda/D', box = 100, 
+                template = [], TC = None, use_same = True, verbose = True,
                 # Params for handling KLIP bases:
                 returnZ = False, Z = [], immean = [],
                 # Params for user supplied image cubes:
-                returnstamps = False, sciencecube = [], refcube = [],
+                returnstamps = False, sciencecube = [], refcube = [], templatecube = [],
                 # Params for preparing images for KLIP:
                 normalize = True, normalizebymask = False,  normalize_radius = [],
                 mask_core = True, mask_radius = 1.
@@ -1172,6 +1178,9 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             option to supply a template psf for creating fake signal with known contrast to science target
         TC : float
             known contrast of template psf, required only if external supplied template is used
+        use_same : bool
+            if True, use the star's own psf as template for injecting signal.  If False, use the opposite star as template.
+            Same star seems to give higher snr thus is prefered.  Default = True
         verbose : bool
             if true allow functions to print statements
         returnZ : bool
@@ -1185,9 +1194,9 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
         returnstamps : bool
             if True, return image stamps.  Useful to toggle on and off to avoid having to stack and shift
             images base every time you test a new injected planet, which takes time.  Default = False
-        sciencecub, refcube : 3d arr
-            user input the base images to use in injection.  Typically will be the output of a previous
-            DoInjection run where returnstamps=True
+        sciencecub, refcube, templatecube : 3d arr
+            user input the base images to use in injection for science images, psf templates, and KLIP reference basis sets.  
+            Typically will be the output of a previous DoInjection run where returnstamps=True
         normalize : bool
            if True, normalize each image science and reference image integrated flux by dividing by each image
            by the sum of all pixels in image.  If False do not normalize images. Default = True
@@ -1211,21 +1220,39 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
     '''
     from cliotools.bditools import psf_subtract
     k = pd.read_csv(path+'CleanList', comment='#')
-    # First, if cubes aren't provided, build up the science and reference cubes
-    # from the provided directory and prepare them for KLIP:
+    
+    # First, if cubes aren't provided, build up the science cube (science target),
+    # template cube (for creating synthetic planet signal)
+    # and reference cube (for generating KLIP reduction basis set)
+    # from the provided directory:
     if not len(sciencecube):
         from cliotools.bditools import PrepareCubes
         # Collect and register the science images, but do no
         # normalize or mask yet, that must be done after signal injection:
-        astamp, bstamp = PrepareCubes(k, boxsize = box, verbose = True, \
+        astamp, bstamp = PrepareCubes(k, boxsize = box, verbose = verbose, \
                                       normalize=False, mask_core=False)
+        # Assign astamp/bstamp to PSF template and science cubes:
+        if use_same:
+            if Star == 'A':
+                sciencecube = astamp.copy()
+                templatecube = astamp.copy()
+            elif Star == 'B':
+                sciencecube = bstamp.copy()
+                templatecube = bstamp.copy()
+        else:
+            if Star == 'A':
+                sciencecube = astamp.copy()
+                templatecube = bstamp.copy()
+            elif Star == 'B':
+                sciencecube = bstamp.copy()
+                templatecube = astamp.copy()
+        # Assign astamp/bstamp to KLIP reduction reference cubes, opposite star from
+        # science star:
         if Star == 'A':
-            sciencecube = astamp
-            refcube = bstamp
+            refcube = bstamp.copy()
         elif Star == 'B':
-            sciencecube = bstamp
-            refcube = astamp
-            
+            refcube = astamp.copy()
+                
     # Inject planet signal into science target star
     synthcube = np.zeros(np.shape(sciencecube))
     from cliotools.bditools import injectplanets
@@ -1234,17 +1261,17 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
         for i in range(sciencecube.shape[0]):
             from cliotools.bditools import contrast
             # Get template constrast of refcube to sciencecube
-            TC = contrast(sciencecube[i],refcube[i],[box+0.5,box+0.5],[box+0.5,box+0.5])
+            TC = contrast(sciencecube[i],templatecube[i],[box+0.5,box+0.5],[box+0.5,box+0.5])
             # image header must be provided to 
             # accomodate rotation from north up reference got PA to image reference:
             imhdr = fits.getheader(k['filename'][i]) 
             # Inject the desired signal into the science cube:
-            synth = injectplanets(sciencecube[i], imhdr, refcube[i], sep, pa, C, TC, box, box, 
+            synth = injectplanets(sciencecube[i], imhdr, templatecube[i], sep, pa, C, TC, box, box, 
                                           sepformat = sepformat, wavelength = 3.9, box = box)
             # place signal-injected image into stack of images:
             synthcube[i,:,:] = synth
     else:
-        # It external template is provided: (this might happen if other star is saturated, etc)
+        # If external template is provided: (this might happen if other star is saturated, etc)
         if not TC:
             # Known contrast of template to science star must be provided
             raise ValueError('template contrast needed')
@@ -1255,7 +1282,8 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
                                           sepformat = sepformat, wavelength = 3.9, box = box)
             synthcube[i,:,:] = synth
     
-    # Normalize and mask:    
+    
+    # Normalize and mask both science target with injected signal, and reference star basis set:    
     from cliotools.bditools import normalize_cubes, mask_star_core
     if normalize:
         synthcube,refcube = normalize_cubes(synthcube, refcube, normalizebymask = False)
@@ -1265,7 +1293,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             
     if not len(Z):
         # Use psf subtraction function to build a basis from opposite star, and
-        # throw away the subtracted image because all we need is the basis set.
+        # throw away the subtracted image (F) because all we need is the basis set.
         F, Z, immean = psf_subtract(sciencecube[0], refcube, K_klip, return_basis = True, return_cov = False)
         # If you tried to use more basis modes than there are reference psfs, the size of Z will
         # be the max number of available modes.  So we need to reset our ask to the max number 
@@ -1363,9 +1391,9 @@ def getsnr(image, sep, pa, xc, yc, wavelength = 3.9):
     snr = signal / ( noise * np.sqrt(1+ (1/np.size(pas))) )
     return snr
 
-def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returnsnrs = False, writeklip = True,
+def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returnsnrs = False, writeklip = True, verbose = False,  update_prog = True, use_same = True,
          **kwargs):
-    ''' For a given separation and contrast of an injected planet signal around Star A/B, 
+    ''' For a single value of separation and contrast of an injected planet signal around Star A/B, 
         compute the SNR using the method in Mawet 2014.  kwargs are fed to DoInjection
 
         Parameters:
@@ -1376,9 +1404,9 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
             star to put the fake signal around
         K_klip : int
             number of KLIP modes to use in psf subtraction
-        sep : flt or fltarr
+        sep : flt
             separation of planet placement in either arcsec, mas, pixels, or lambda/D
-        C : flt or fltarr
+        C : flt
             desired contrast of planet with central object
         sepformat : str
             format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
@@ -1390,7 +1418,10 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
             in the ring.
         writeklip : bool
             if True, write a fits image of the KLIP-reduced image of the first injected
-            planet signal into the directory specified in "path".
+            planet signal into the directory specified in "path".  Default = True
+        update_prog : bool
+            if True, update progress bar on performing SNR calc on each aperture in ring.  If
+            False, do not show progess bar.  Default - True
             
         Returns:
         --------
@@ -1419,24 +1450,34 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
     # Do initial run on 1st pa location to create stamps and KLIP basis set:
     kliped, Z, immean, astamp, bstamp = DoInjection(path, Star, K_klip, sep, pa, C, 
                     sepformat = sepformat, box = box, 
-                    verbose = True, returnZ = True, returnstamps = True, **kwargs)
+                    verbose = verbose, returnZ = True, returnstamps = True, use_same = use_same, **kwargs)
     if writeklip:
         from astropy.io import fits
-        name = path+'/injectedsignal_star'+Star+'_sep'+str(sep)+'_C'+str(C)+'.fit'
+        name = path+'/injectedsignal_star'+Star+'_sep'+'{:.0f}'.format(sep)+'_C'+'{:.1f}'.format(C)+'.fit'
         fits.writeto(name,kliped.data,overwrite=True)
     # compute SNR for first injected location:
     s = getsnr(kliped, sep, pa, xc, yc)
     # place in container
     snrs[0] = s
-    # Update progress:
-    update_progress(0+1,len(pas))
+    if update_prog:
+        # Update progress:
+        update_progress(0+1,len(pas))
     
     if Star == 'A':
         sciencecube = astamp.copy()
         refcube = bstamp.copy()
+        if use_same:
+            templatecube = astamp.copy()
+        else:
+            templatecube = bstamp.copy()
+            
     elif Star == 'B':
         sciencecube = bstamp.copy()
         refcube = astamp.copy()
+        if use_same:
+            templatecube = bstamp.copy()
+        else:
+            templatecube = astamp.copy()
     
     # Repeat for all apertures in the ring:
     for i in range(1,len(pas)):
@@ -1447,16 +1488,81 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
                              # Use previously computed basis set and mean imageL
                              Z = Z, immean = immean,
                              # Use previously made data cubes:
-                             sciencecube = sciencecube, refcube = refcube, **kwargs)
+                             sciencecube = sciencecube, refcube = refcube, templatecube = templatecube, **kwargs)
         # compute and store SNR:
         snr = getsnr(kliped, sep, pas[i], xc, yc)
         snrs[i] = snr
-        update_progress(i+1,len(pas))
+        if update_prog:
+            update_progress(i+1,len(pas))
         
     if returnsnrs:
         return np.mean(snrs), snrs
         
     return np.mean(snrs)
+
+
+def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
+                   cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
+                   fontsize=15, plotstyle = 'magrathea'):
+    
+    """ After running DoSNR for a range of seps and contrasts, generate a map of SNR
+        with contours at some intervals for contrast curves.  Uses scipy interpolate to
+        expand sep/C to a square matrix and fill in intervals in what was tested.
+
+        Parameters:
+        -----------
+        path : str
+            dataset folder
+        Star : 'A' or 'B'
+            which star had the signal injection
+        sep, C : 1d arr
+            arrays of separations and contrasts that were tested in the 
+            DoSNR run
+        curves_file : str
+            string of the pickle file containing the output from the DoSNR run.
+            If blank, assumes the file is named path/snrs[STAR].pkl
+        Ncontours_cmap : int
+            number of contours to draw and fill for the SNR map
+        Ncontours_label : int
+            number of contours to draw and label ontop of the map
+
+        Returns
+        -------
+        fig : matplotlib figure object
+            snr plot
+        
+    """
+    from scipy import interpolate
+    if not len(curves_file):
+        snrs = pickle.load( open( path+"snrs"+Star+".pkl", "rb" ) )
+    else:
+        snrs = pickle.load( open( path+curves_file, "rb" ) )
+    resep = np.linspace(np.min(sep),np.max(sep),len(C))
+    m = np.max([len(sep),len(C)])
+    newSNRs = np.zeros((m,m))
+    for i in range(m):
+        f = interpolate.interp1d(sep, snrs[i])
+        newSNR = f(resep)
+        newSNRs[i] = newSNR
+        
+    try:
+        plt.style.use(plotstyle)
+    except:
+        plt.style.use('default')
+    fig = plt.figure()
+    contours = plt.contour(resep,C,newSNRs, Ncontours_label, colors='red',linestyles=(':',))
+    plt.clabel(contours, inline=True, fontsize=fontsize,fmt='%1.0f')
+    contour = plt.contour(resep,C,newSNRs,levels = [5.0],
+                     colors=('r',),linestyles=('-',),linewidths=(2,))
+    plt.clabel(contour, inline=True, fontsize=fontsize,fmt='%1.0f')
+    plt.contourf(resep,C,newSNRs,Ncontours_cmap,cmap=cmap)
+    plt.colorbar()
+    plt.gca().invert_yaxis()
+    plt.xlabel(r'Sep [$\frac{\lambda}{D}$]')
+    plt.ylabel('contrast [mags]')
+    plt.title(path.split('/')[0]+' '+Star)
+    return fig
+    
 
 ##########################################################################
 #              DEPRECATED                                                #
