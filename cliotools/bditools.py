@@ -505,6 +505,7 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
     '''
     from cliotools.bditools import ab_stack_shift
     astack, bstack = ab_stack_shift(k, boxsize = boxsize,  path_prefix=path_prefix, verbose = verbose)
+    center = (0.5*((astack[0].shape[0])-1),0.5*((astack[0].shape[1])-1))
     if normalize:
         from cliotools.bditools import normalize_cubes
         # Normalize cubes:
@@ -515,13 +516,13 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
         from cliotools.bditools import mask_star_core
         # Set all pixels within a radius of the center to zero:
         acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_star_core(acube2, bcube2, inner_mask_radius, acube[0].shape[0]/2, acube[0].shape[1]/2, mask_format = inner_mask_format)
+        acube,bcube = mask_star_core(acube2, bcube2, inner_mask_radius,center[0], center[1], mask_format = inner_mask_format)
     if outer_mask_annulus:
         from cliotools.bditools import mask_outer
         if outer_mask_radius == None:
             raise ValueError('Outer radius must be specified if mask_outer_annulus == True')
         acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_outer(acube2, bcube2, outer_mask_radius, acube[0].shape[0]/2, acube[0].shape[1]/2)
+        acube,bcube = mask_outer(acube2, bcube2, outer_mask_radius, center[0], center[1])
     return acube,bcube
 
 
@@ -729,9 +730,9 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
     from scipy import ndimage
     import image_registration
     # Shift science image to line up with reference psfs (aligned during the cubing step):
-    dx,dy,edx,edy = image_registration.chi2_shift(np.sum(ref_psfs,axis=0), scienceimage, upsample_factor='auto')
-    scienceimage = ndimage.shift(scienceimage, [-dy,-dx], output=None, order=4, mode='constant', \
-                              cval=0.0, prefilter=True)
+    #dx,dy,edx,edy = image_registration.chi2_shift(np.sum(ref_psfs,axis=0), scienceimage, upsample_factor='auto')
+    #scienceimage = ndimage.shift(scienceimage, [-dy,-dx], output=None, order=4, mode='constant', \
+    #                          cval=0.0, prefilter=True)
     # Start KLIP math:
     from scipy.linalg import eigh
     
@@ -822,6 +823,7 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
     # Soummer 2.2.5
     # Truncate the science image to the different number of requested modes to use:
     outputimage = T_meansub[:np.size(K_klip),:]
+    outputimage1 = outputimage.copy()
     # Subtract estimated psf from science image:
     outputimage = outputimage - Ihat
     # Reshape to 
@@ -843,7 +845,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
                    # writing parameters:\
                    write_to_disk = True, write_directory = '.', outfilesuffix = '',headercomment = None, \
                    # other parameters:\
-                   reshape = False, verbose = True\
+                   reshape = False, verbose = True, cval = 0.0, order = 1
                 ):
     """For each image in the astamp/bstamp cubes, PSF subtract image, rotate to
        north up/east left; then median combine all images for star A and star B into
@@ -888,6 +890,10 @@ def SubtractCubes(acube, bcube, K_klip, k,\
            input cubes.
        verbose : bool
            if True, print status updates
+       cval : flt or nan
+           fill value for rotated images
+       order : int [0,5]
+           order of interpolation when rotating, fed into ndimage.rotate
            
        Returns:
        --------
@@ -901,17 +907,6 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     """
     from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract, normalize_cubes
     from astropy.stats import sigma_clip
-    
-    #if normalize:
-        # Normalize cubes:
-    #    acube,bcube = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalize_radius)
-    #elif normalize == False:
-    #    acube,bcube = astack.copy(),bstack.copy()
-
-    #if mask_core:
-        # Set all pixels within a radius of the center to zero:
-    #    acube2,bcube2 = acube.copy(),bcube.copy()
-    #    acube,bcube = mask_star_core(acube2, bcube2, mask_radius, acube[0].shape[0]/2, acube[0].shape[1]/2)
 
     N = acube.shape[0]
     if N < np.max(K_klip):
@@ -924,7 +919,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     # measure the final product image dimensions by performing rotation
     # on first image in cube:
     imhdr = fits.getheader(k['filename'][0])
-    a0_rot = rotate_clio(acube[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
+    a0_rot = rotate_clio(acube[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=cval)
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
     b_final = np.zeros(a_final.shape)
     
@@ -944,7 +939,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         Fa, Zb, immeanb = psf_subtract(acube[i], bcube, K_klip[j], return_basis = True, verbose = verbose)
         # get header and rotate image:
         imhdr = fits.getheader(k['filename'][i])
-        Fa_rot = rotate_clio(Fa[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
+        Fa_rot = rotate_clio(Fa[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
         # make a cube to store results:
         a = np.zeros([acube.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
         # Place the psf subtracted image into the container cube:
@@ -955,7 +950,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2a  = psf_subtract(acube[i], bcube, K_klip[j], use_basis = True, basis = Zb, mean_image = immeanb, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2a_rot = rotate_clio(F2a[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
+            F2a_rot = rotate_clio(F2a[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
             # store:
             a[i,:,:] = F2a_rot
         # final product is combination of subtracted and rotated images:
@@ -967,7 +962,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         i = 0
         #Fb, Za = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True, verbose = verbose)
         Fb, Za, immeana = psf_subtract(bcube[i], acube, K_klip[j], return_basis = True, verbose = verbose)
-        Fb_rot = rotate_clio(Fb[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=np.nan)
+        Fb_rot = rotate_clio(Fb[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
         b = np.zeros(a.shape)
         b[i,:,:] = Fb_rot
         for i in range(1,b.shape[0]):
@@ -975,7 +970,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2b  = psf_subtract(bcube[i], acube, K_klip[j], use_basis = True, basis = Za, mean_image = immeana, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2b_rot = rotate_clio(F2b[0], imhdr, order = 4, reshape =reshape, mode='constant', cval=np.nan)
+            F2b_rot = rotate_clio(F2b[0], imhdr, order = order, reshape =reshape, mode='constant', cval=cval)
             # store:
             b[i,:,:] = F2b_rot
         #b_final[j,:,:] = np.median(b, axis = 0)
