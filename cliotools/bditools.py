@@ -290,11 +290,11 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
 
 ################################ prepare images for KLIP ##################################################
 
-def rotate_clio(image, imhdr, **kwargs):
-    """Rotate CLIO image to north up east left.
+def rotate_clio(image, imhdr, center = None, interp = 'bicubic', bordermode = 'constant', cval = 0, scale = 1):
+    """Rotate CLIO image to north up east left.  Uses OpenCV image processing package
        Written by Logan A. Pearce, 2020
        
-       Dependencies: scipy
+       Dependencies: OpenCV
 
        Parameters:
        -----------
@@ -302,18 +302,61 @@ def rotate_clio(image, imhdr, **kwargs):
            2d image array
        imhdr : fits header object
            header for image to be rotated
-       kwargs : for scipy.ndimage
+       center : None or tuple
+           (x,y) subpixel location for center of rotation.  If center=None,
+           computes the center pixel of the image.
+       interp : str
+            Interpolation mode for OpenCV.  Either nearest, bilinear, bicubic, or lanczos4.
+            Default = bicubic
+       bordermode : str
+            How should OpenCV handle the extrapolation at the edges.  Either constant, edge, 
+            symmetric, reflect, or wrap.  Default = constant
+       cval : int or np.nan
+            If bordermode = constant, fill edges with this value.  Default = 0
+       scale : int or flt
+            scale parameter for OpenCV.  Scale = 1 does not scale the image.  Default = 1
            
        Returns:
        --------
        imrot : 2d arr 
            rotated image with north up east left
     """
-    from scipy import ndimage
+    import cv2
     NORTH_CLIO = -1.80
     derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
-    imrot = ndimage.rotate(image, derot, **kwargs)
+    
+    if interp == 'bicubic':
+        intp = cv2.INTER_CUBIC
+    elif interp == 'lanczos4':
+        intp = cv2.INTER_LANCZOS4
+    elif interp == 'bilinear':
+        intp = cv2.INTER_LINEAR
+    elif interp == 'nearest':
+        intp = cv2.INTER_NEAREST
+    else:
+        raise ValueError('Interpolation mode: please enter nearest, bilinear, bicubic, or lanczos4')
+        
+    if bordermode == 'constant':
+        bm = cv2.BORDER_CONSTANT 
+    elif bordermode == 'edge':
+        bm = cv2.BORDER_REPLICATE 
+    elif bordermode == 'symmetric':
+        bm = cv2.BORDER_REFLECT
+    elif bordermode == 'reflect':
+        bm = cv2.BORDER_REFLECT_101
+    elif bordermode == 'wrap':
+        bm = cv2.BORDER_WRAP
+    else:
+        raise ValueError('Border mode: please enter constant, edge, symmetric, reflect, or wrap')
+        
+    y, x = image.shape
+    if not center:
+        center = (0.5*((image.shape[1])-1),0.5*((image.shape[0])-1))
+    M = cv2.getRotationMatrix2D(center, derot, scale)
+    imrot = cv2.warpAffine(image, M, (x, y),flags=intp, borderMode=bm, borderValue=cval)
+
     return imrot
+    
 
 def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
     """Prepare cubes for BDI by stacking and subpixel aligning image 
@@ -845,7 +888,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
                    # writing parameters:\
                    write_to_disk = True, write_directory = '.', outfilesuffix = '',headercomment = None, \
                    # other parameters:\
-                   reshape = False, verbose = True, cval = 0.0, order = 1
+                   reshape = False, verbose = True, interp = 'bicubic', cval = 0.0
                 ):
     """For each image in the astamp/bstamp cubes, PSF subtract image, rotate to
        north up/east left; then median combine all images for star A and star B into
@@ -919,7 +962,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     # measure the final product image dimensions by performing rotation
     # on first image in cube:
     imhdr = fits.getheader(k['filename'][0])
-    a0_rot = rotate_clio(acube[0], imhdr, order = 4, reshape = reshape, mode='constant', cval=cval)
+    a0_rot = rotate_clio(acube[0], imhdr)
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
     b_final = np.zeros(a_final.shape)
     
@@ -939,7 +982,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         Fa, Zb, immeanb = psf_subtract(acube[i], bcube, K_klip[j], return_basis = True, verbose = verbose)
         # get header and rotate image:
         imhdr = fits.getheader(k['filename'][i])
-        Fa_rot = rotate_clio(Fa[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
+        Fa_rot = rotate_clio(Fa[0], imhdr, interp = interp, cval = cval)
         # make a cube to store results:
         a = np.zeros([acube.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
         # Place the psf subtracted image into the container cube:
@@ -950,7 +993,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2a  = psf_subtract(acube[i], bcube, K_klip[j], use_basis = True, basis = Zb, mean_image = immeanb, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2a_rot = rotate_clio(F2a[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
+            F2a_rot = rotate_clio(F2a[0], imhdr, interp = interp, cval = cval)
             # store:
             a[i,:,:] = F2a_rot
         # final product is combination of subtracted and rotated images:
@@ -962,7 +1005,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         i = 0
         #Fb, Za = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True, verbose = verbose)
         Fb, Za, immeana = psf_subtract(bcube[i], acube, K_klip[j], return_basis = True, verbose = verbose)
-        Fb_rot = rotate_clio(Fb[0], imhdr, order = order, reshape = reshape, mode='constant', cval=cval)
+        Fb_rot = rotate_clio(Fb[0], imhdr, interp = interp, cval = cval)
         b = np.zeros(a.shape)
         b[i,:,:] = Fb_rot
         for i in range(1,b.shape[0]):
@@ -970,7 +1013,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2b  = psf_subtract(bcube[i], acube, K_klip[j], use_basis = True, basis = Za, mean_image = immeana, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2b_rot = rotate_clio(F2b[0], imhdr, order = order, reshape =reshape, mode='constant', cval=cval)
+            F2b_rot = rotate_clio(F2b[0], imhdr, interp = interp, cval = cval)
             # store:
             b[i,:,:] = F2b_rot
         #b_final[j,:,:] = np.median(b, axis = 0)
@@ -988,7 +1031,6 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             newhdr['COMMENT'] = headercomment
         fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b'+outfilesuffix+'.fit',b_final,newhdr,overwrite=True)
     return a_final, b_final
-
 '''
 def do_bdi(k, K_klip, **kwargs):
     """Wrapper function for BDI psf subtraction functions
@@ -1637,6 +1679,31 @@ def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), c
 
 ##########################################################################
 #              DEPRECATED                                                #
+
+def rotate_clio_ndimage(image, imhdr, **kwargs):
+    """Rotate CLIO image to north up east left.
+       Written by Logan A. Pearce, 2020
+       
+       Dependencies: scipy
+
+       Parameters:
+       -----------
+       image : 2d array
+           2d image array
+       imhdr : fits header object
+           header for image to be rotated
+       kwargs : for scipy.ndimage
+           
+       Returns:
+       --------
+       imrot : 2d arr 
+           rotated image with north up east left
+    """
+    from scipy import ndimage
+    NORTH_CLIO = -1.80
+    derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
+    imrot = ndimage.rotate(image, derot, **kwargs)
+    return imrot
 
 def DoInjection_deprecated(path, Star, sep, pa, C, sepformat = None, box=100, template = None, TC = None, outsuffix = '', returng = False, showprog = True):
     ''' Wrapper function to inject fake planet signal into all images in dataset
