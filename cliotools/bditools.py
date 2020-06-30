@@ -223,7 +223,7 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
            must be named "list".  
         append_file : bool
             Set to True to append to an existing locations file, False to make a new file or 
-            overwrite an old one.  Defautl = False.
+            overwrite an old one.  Default = False.
         threshold : flt
             threshold for finding stars using DAOStarFinder
 
@@ -482,7 +482,8 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
                 coadd_count += a.shape[0]
             except:
                 if verbose:
-                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. I cut it off at i=',count)
+                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. \
+                          I cut it off at i=',count)
                 astamp = astamp[:coadd_count,:,:]
                 bstamp = bstamp[:coadd_count,:,:]
                 return astamp, bstamp
@@ -497,12 +498,14 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
 
 
 def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
-                     # normalizing parameters:\
+                   # normalizing parameters:\
                    normalize = True, normalizebymask = False,  normalize_radius = [],\
                    # star masking parameters:\
-                   inner_mask_core = True, inner_mask_format = 'lambda/D', inner_mask_radius = 1.,\
+                   inner_mask_core = True, inner_radius_format = 'pixels', inner_mask_radius = 1., cval = 0,\
                    # masking outer annulus:\
-                   outer_mask_annulus = False, outer_mask_radius = None
+                   outer_mask_annulus = False, outer_radius_format = 'pixels', outer_mask_radius = None,
+                   # User supplied cubes:
+                   acube = None, bcube = None
                 ):
     ''' Assemble cubes of images and prepare them for KLIP reduction by: centering/subpixel-aligning images along
         vertical axis, normalizing images by dividing by sum of pixels in image, and masking the core of the central star.
@@ -513,7 +516,8 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
        -----------
        k : Pandas array
            Pandas array made from the output of bditools.findstars_in_dataset.  
-           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb']
+           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb'].  If
+           acube,bcube are supplied, this will be a dummy variable.
        boxsize : int
            size of box to draw around star psfs for DAOStarFinder
        path_prefix : int
@@ -540,32 +544,36 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
            if True, set all pixels outside the specified radius to zero.  Default = False
        outer_radius : flt
            Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
+       acube, bcube : 3d array
+           User can supply already stacked and aligned image cubes and skip the alignment step.
            
        Returns:
        --------
        acube, bcube : 3d arr
            cube of images of Star A and B ready to be put into KLIP reduction pipeline.
     '''
-    from cliotools.bditools import ab_stack_shift
-    astack, bstack = ab_stack_shift(k, boxsize = boxsize,  path_prefix=path_prefix, verbose = verbose)
+    if not acube:
+        from cliotools.bditools import ab_stack_shift
+        astack, bstack = ab_stack_shift(k, boxsize = boxsize,  path_prefix=path_prefix, verbose = verbose)
+    else:
+        astack, bstack = acube.copy(),bcube.copy()
     center = (0.5*((astack[0].shape[0])-1),0.5*((astack[0].shape[1])-1))
     if normalize:
         from cliotools.bditools import normalize_cubes
         # Normalize cubes:
         acube,bcube = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalize_radius)
-    elif normalize == False:
-        acube,bcube = astack.copy(),bstack.copy()
     if inner_mask_core:
         from cliotools.bditools import mask_star_core
         # Set all pixels within a radius of the center to zero:
         acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_star_core(acube2, bcube2, inner_mask_radius,center[0], center[1], mask_format = inner_mask_format)
+        acube,bcube = mask_star_core(acube2, bcube2, inner_mask_radius,center[0], center[1], 
+                                    radius_format = inner_radius_format, cval = cval)
     if outer_mask_annulus:
         from cliotools.bditools import mask_outer
         if outer_mask_radius == None:
             raise ValueError('Outer radius must be specified if mask_outer_annulus == True')
         acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_outer(acube2, bcube2, outer_mask_radius, center[0], center[1])
+        acube,bcube = mask_outer(acube2, bcube2, outer_mask_radius, center[0], center[1], radius_format = outer_radius_format, cval = cval)
     return acube,bcube
 
 
@@ -625,70 +633,80 @@ def normalize_cubes(astack,bstack, normalizebymask = False,  radius = []):
             b[i] = data[i] / summed
     return a,b
 
-def mask_star_core(astack, bstack, radius, xc, yc, mask_format = 'lambda/D'):
+def mask_star_core(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 0):
     ''' Set the core of the star flux to zero pixel value
        Parameters:
        ----------
        astack, bstack : 3d array
            cube of unnormalized images
        radius : flt
-           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
+           Exclude pixels interior to this radius  
        xc, yc : flt
            x/y of star center
        mask_format : str
-           request inner core mask in lamdba/D or pixels
+           What quantity is the requested mask radius. Either 'lamdba/D' or 'pixels'.  Default = 'pixels'.
+       cval : flt or nan
+           value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
+           the reduction step.
            
        Returns:
        --------
        anans, bnans : 3d arr
            cube of normalized images
     '''
-    from cliotools.cliotools import lod_to_pixels
-    shape = astack[0].shape
-    xx,yy = np.meshgrid(np.arange(shape[0])-xc,np.arange(shape[1])-yc)
-    # compute radius of each pixel from center:
-    r=np.hypot(xx,yy)
-    if mask_format == 'lambda/D':
-        radius = lod_to_pixels(radius, 3.9)
-    elif mask_format == 'pixels':
-        pass
-    else:
-        raise ValueError('please specify mask_format = lambda/D or pixels')
-    anans,bnans = astack.copy(),bstack.copy()
-    for i in range(astack.shape[0]):
-        anans[i][np.where(r<radius)] = 0
-        bnans[i][np.where(r<radius)] = 0
-    return anans,bnans
-
-def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels'):
-    ''' Set the core of the star flux to zero pixel value
-       Parameters:
-       ----------
-       astack, bstack : 3d array
-           cube of unnormalized images
-       radius : flt
-           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
-       xc, yc : flt
-           x/y of star center
-       radius_format : str
-           How to handle requested outer annulus mask radius. Either pixels or lambda/D.
-           
-       Returns:
-       --------
-       anans, bnans : 3d arr
-           cube of normalized images
-    '''
-    from cliotools.cliotools import lod_to_pixels
     shape = astack[0].shape
     xx,yy = np.meshgrid(np.arange(shape[0])-xc,np.arange(shape[1])-yc)
     # compute radius of each pixel from center:
     r=np.hypot(xx,yy)
     if radius_format == 'lambda/D':
+        from cliotools.cliotools import lod_to_pixels
         radius = lod_to_pixels(radius, 3.9)
+    elif radius_format == 'pixels':
+        pass
+    else:
+        raise ValueError('please specify mask_format = lambda/D or pixels')
     anans,bnans = astack.copy(),bstack.copy()
     for i in range(astack.shape[0]):
-        anans[i][np.where(r>radius)] = 0
-        bnans[i][np.where(r>radius)] = 0
+        anans[i][np.where(r<radius)] = cval
+        bnans[i][np.where(r<radius)] = cval
+    return anans,bnans
+
+def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 0):
+    ''' Set the core of the star flux to zero pixel value
+       Parameters:
+       ----------
+       astack, bstack : 3d array
+           cube of images
+       radius : flt
+           Exclude pixels exterior to this radius
+       xc, yc : flt
+           x/y of star center
+       radius_format : str
+           How to handle requested outer annulus mask radius. Either 'pixels' or 'lambda/D'.
+       cval : flt or nan
+           value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
+           the reduction step.
+           
+       Returns:
+       --------
+       anans, bnans : 3d arr
+           cube of normalized images
+    '''
+    shape = astack[0].shape
+    xx,yy = np.meshgrid(np.arange(shape[0])-xc,np.arange(shape[1])-yc)
+    # compute radius of each pixel from center:
+    r=np.hypot(xx,yy)
+    if radius_format == 'lambda/D':
+        from cliotools.cliotools import lod_to_pixels
+        radius = lod_to_pixels(radius, 3.9)
+    elif radius_format == 'pixels':
+        pass
+    else:
+        raise ValueError('please specify mask_format = lambda/D or pixels')
+    anans,bnans = astack.copy(),bstack.copy()
+    for i in range(astack.shape[0]):
+        anans[i][np.where(r>radius)] = cval
+        bnans[i][np.where(r>radius)] = cval
     return anans,bnans
                 
 def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
@@ -708,7 +726,6 @@ def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
     except:
         header['NAXIS1'] = str(shape[0])
         header['NAXIS2'] = str(shape[1])
-        header['NAXIS3'] = str(1)
     header['DATE'] = time.strftime("%m/%d/%Y")
     header['DATASET'] = dataset
     header['STAR'] = str(star)
@@ -885,67 +902,66 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
 def SubtractCubes(acube, bcube, K_klip, k,\
                    # optional user inputs:\
                    a_covariances=None, b_covariances=None, a_estimator=None, b_estimator=None, \
-                   # writing parameters:\
-                   write_to_disk = True, write_directory = '.', outfilesuffix = '',headercomment = None, \
                    # other parameters:\
-                   reshape = False, verbose = True, interp = 'bicubic', cval = 0.0
+                   verbose = True, interp = 'bicubic', rot_cval = 0.0
                 ):
-    """For each image in the astamp/bstamp cubes, PSF subtract image, rotate to
-       north up/east left; then median combine all images for star A and star B into
-       single reduced image.  Do this for an array of KLIP mode cutoff values.  Writes
-       reduced images to disk in fits cube with z axis = # of KLIP mode cutoff values.
+    """
+    KLIP reduce cubes
 
-       Written by Logan A. Pearce, 2020
-       Dependencies: numpy, astropy.io.fits
+    SubtractCubes performs the BDI KLIP math.  For the cube of Star A, it builds a PCA basis set
+    using the cube of Star B, then steps through the stack of images on Star A, projecting each image
+    onto the basis set to build a PSF model, and then subtracting the reconstructed model from the
+    original image.  The subtracted image is derotated to North Up East Left using OpenCV2 rotation function.  
+    When all images in the cube have been subtracted, it takes a sigma-clipped mean along the vertical 
+    axis as the final reduced image.  Then repeats for Star B, using Star A as basis set.
 
-       Parameters:
-       -----------
-       astack, bstack : 3d array
-           cube of unnormalized postage stamp images of star A and star B, array of shape Nxmxn 
-           where N = number of images in dataset (or truncated cube if boxsize prevents 
-           using every image).  Output of ab_stack_shift function.
-       K_klip : int or arr
-           Number of basis modes desired to use.  Can be integer or array of len b
-       k : Pandas array
-           Pandas array made from the output of bditools.findstars_in_dataset.  
-           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb']. Same Pandas array used in
-           the ab_stack_shift function.
-       a_covariances, b_covariances : arr
-           covariance matrix for ref psfs for star A or B can be passed as an argument to avoid needing
-           to calculate it
-       a_estimator, b_estimator : 2d arr
-           psf model (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
-           to calculate it
-       write_to_disk : bool
-           when set to True, output arrays will be written to fits files in the specified directory. 
-           Default = True
-       write_directory : str
-           directory to write fits cubes of output files.
-       outfilesuffix : str
-           optional suffix to end of output cube filename.  For example, note that the boxsize used for a
-           a reduction was 100 pixels by setting outfilesuffix = box100, filename will be dataset_klipcube_a_box100.fit
-       headercomment : str
-           optional comment to add to header in klip cube
-       reshape : bool
-           argument passed to ndimage.rotate.  If True, final output image size will change to fit entire rotated
-           image, but this causes problems when different images in a set are rotated by different amounts, causing the 
-           final arrays to be different sizes.  Should be set to False, which makes rotated image be the same dimensions as
-           input cubes.
-       verbose : bool
-           if True, print status updates
-       cval : flt or nan
-           fill value for rotated images
-       order : int [0,5]
-           order of interpolation when rotating, fed into ndimage.rotate
-           
-       Returns:
-       --------
-       a_final, b_final : 3d arr
-           cube of psf subtracted and sigma-clipped mean combined postagestamp images
-           of star A and B, with z = # of KLIP mode cutoff values.
-           If write_to_disk = True the cubes are written to fits files with
-           custom headers with filename of system and suffix "_klipcube_a.fits" 
-           and "_klipcube_b.fits"
+    Written by Logan A. Pearce, 2020
+    Dependencies: numpy, astropy.io.fits, OpenCV
+
+    Parameters:
+    -----------
+    acube, bcube : 3d array
+        cube of unnormalized postage stamp images of star A and star B, array of shape Nxmxn 
+        where N = number of images in dataset (or truncated cube if boxsize prevents 
+        using every image).  Output of ab_stack_shift function.
+    K_klip : int or arr
+        Number of basis modes desired to use.  Can be integer or array of len b
+    k : Pandas array
+        Pandas array made from the output of bditools.findstars_in_dataset.  
+        Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb']. Same Pandas array used in
+        the ab_stack_shift function.
+    a_covariances, b_covariances : arr
+        covariance matrix for ref psfs for star A or B can be passed as an argument to avoid needing
+        to calculate it
+    a_estimator, b_estimator : 2d arr
+        psf model (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
+        to calculate it
+    write_to_disk : bool
+        when set to True, output arrays will be written to fits files in the specified directory. 
+        Default = True
+    write_directory : str
+        directory to write fits cubes of output files.
+    outfilesuffix : str
+        optional suffix to end of output cube filename.  For example, note that the boxsize used for a
+        a reduction was 100 pixels by setting outfilesuffix = box100, filename will be dataset_klipcube_a_box100.fit
+    headercomment : str
+        optional comment to add to header in klip cube
+    verbose : bool
+        if True, print status updates
+    interp : str
+        Interpolation mode for OpenCV.  Either nearest, bilinear, bicubic, or lanczos4.
+        Default = bicubic
+    rot_cval : flt or nan
+        fill value for rotated images
+        
+    Returns:
+    --------
+    a_final, b_final : 3d arr
+        cube of psf subtracted and sigma-clipped mean combined postagestamp images
+        of star A and B, with z = # of KLIP mode cutoff values.
+        If write_to_disk = True the cubes are written to fits files with
+        custom headers with filename of system and suffix "_klipcube_a.fits" 
+        and "_klipcube_b.fits"
 
     """
     from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract, normalize_cubes
@@ -982,7 +998,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         Fa, Zb, immeanb = psf_subtract(acube[i], bcube, K_klip[j], return_basis = True, verbose = verbose)
         # get header and rotate image:
         imhdr = fits.getheader(k['filename'][i])
-        Fa_rot = rotate_clio(Fa[0], imhdr, interp = interp, cval = cval)
+        Fa_rot = rotate_clio(Fa[0], imhdr, interp = interp, cval = rot_cval)
         # make a cube to store results:
         a = np.zeros([acube.shape[0],Fa_rot.shape[0],Fa_rot.shape[1]])
         # Place the psf subtracted image into the container cube:
@@ -993,7 +1009,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2a  = psf_subtract(acube[i], bcube, K_klip[j], use_basis = True, basis = Zb, mean_image = immeanb, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2a_rot = rotate_clio(F2a[0], imhdr, interp = interp, cval = cval)
+            F2a_rot = rotate_clio(F2a[0], imhdr, interp = interp, cval = rot_cval)
             # store:
             a[i,:,:] = F2a_rot
         # final product is combination of subtracted and rotated images:
@@ -1005,7 +1021,7 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         i = 0
         #Fb, Za = psf_subtract(bstamp[i], astamp, K_klip[j], return_basis = True, verbose = verbose)
         Fb, Za, immeana = psf_subtract(bcube[i], acube, K_klip[j], return_basis = True, verbose = verbose)
-        Fb_rot = rotate_clio(Fb[0], imhdr, interp = interp, cval = cval)
+        Fb_rot = rotate_clio(Fb[0], imhdr, interp = interp, cval = rot_cval)
         b = np.zeros(a.shape)
         b[i,:,:] = Fb_rot
         for i in range(1,b.shape[0]):
@@ -1013,24 +1029,16 @@ def SubtractCubes(acube, bcube, K_klip, k,\
             F2b  = psf_subtract(bcube[i], acube, K_klip[j], use_basis = True, basis = Za, mean_image = immeana, verbose = verbose)
             # rotate:
             imhdr = fits.getheader(k['filename'][i])
-            F2b_rot = rotate_clio(F2b[0], imhdr, interp = interp, cval = cval)
+            F2b_rot = rotate_clio(F2b[0], imhdr, interp = interp, cval = rot_cval)
             # store:
             b[i,:,:] = F2b_rot
         #b_final[j,:,:] = np.median(b, axis = 0)
         b_final[j,:,:] = np.nanmean(sigma_clip(b, sigma = 3, axis = 0), axis = 0)
 
-    if write_to_disk is True:
-        if verbose:
-            print('Writing finished cubes to file... done!')
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'A', a_final.shape, acube.shape[1])
-        if headercomment:
-            newhdr['COMMENT'] = headercomment
-        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_a'+outfilesuffix+'.fit',a_final,newhdr,overwrite=True)
-        newhdr = psfsub_cube_header(k['filename'][0].split('/')[0], K_klip, 'B', b_final.shape, bcube.shape[1])
-        if headercomment:
-            newhdr['COMMENT'] = headercomment
-        fits.writeto(k['filename'][0].split('_')[0]+'_klipcube_b'+outfilesuffix+'.fit',b_final,newhdr,overwrite=True)
-    return a_final, b_final
+    if np.size(K_klip) == 1:
+        return a_final[0], b_final[0]
+    else:
+        return a_final, b_final
 '''
 def do_bdi(k, K_klip, **kwargs):
     """Wrapper function for BDI psf subtraction functions
