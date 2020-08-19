@@ -126,7 +126,7 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10,
                     x_subpix, y_subpix = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
             except:
                 if verbose:
-                    print("Failed to find all stars.")
+                    print("daostarfinder: Failed to find all stars.")
                 x_subpix, y_subpix = np.nan, np.nan
 
     return x_subpix, y_subpix
@@ -503,96 +503,134 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
                    # star masking parameters:\
                    inner_mask_core = True, inner_radius_format = 'pixels', inner_mask_radius = 1., cval = 0,\
                    # masking outer annulus:\
-                   outer_mask_annulus = False, outer_radius_format = 'pixels', outer_mask_radius = None,
+                   outer_mask_annulus = True, outer_radius_format = 'pixels', outer_mask_radius = None,\
+                   # subtract radial profile from cubes:\
+                   subtract_radial_profile = True,\
                    # User supplied cubes:
                    acube = None, bcube = None
                 ):
-    ''' Assemble cubes of images and prepare them for KLIP reduction by: centering/subpixel-aligning images along
-        vertical axis, normalizing images by dividing by sum of pixels in image, and masking the core of the central star.
-        Written by Logan A. Pearce, 2020
-       Dependencies: numpy, astropy.io.fits
+    '''Assemble cubes of images and prepare them for KLIP reduction by: centering/subpixel-aligning images along
+    vertical axis, normalizing images by dividing by sum of pixels in image, and masking the core of the central star.
+    Written by Logan A. Pearce, 2020
+    Dependencies: numpy, astropy.io.fits
 
-       Parameters:
-       -----------
-       k : Pandas array
-           Pandas array made from the output of bditools.findstars_in_dataset.  
-           Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb'].  If
-           acube,bcube are supplied, this will be a dummy variable.
-       boxsize : int
-           size of box to draw around star psfs for DAOStarFinder
-       path_prefix : int
-           string to put in front of filenames in input file in case the relative
-           location of files has changed.
-       verbose : bool
-           if True, print status updates
-       normalize : bool
-           if True, normalize each image science and reference image integrated flux by dividing by each image
-           by the sum of all pixels in image.  If False do not normalize images. Default = True
-       normalizebymask : bool
-           if True, normalize using only the pixels in a specified radius to normalize.  Default = False
-       normalize_radius : flt
-           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
-       inner_mask_core : bool
-           if True, set all pixels within mask_radius to value of 0 in all images.  Default = True
-       inner_mask_format : str
-           request inner core mask in lamdba/D or pixels.  Default = lambda/D
-       inner_mask_radius : flt
-           radius of inner mask in L/D or pixels.  Default = 1. lamdba/D
-       mask_outer_radius : flt
-           Set all pixels within this radius to 0 if mask_core set to True.  Must be units of lambda/D.
-       mask_outer_annulus: bool
-           if True, set all pixels outside the specified radius to zero.  Default = False
-       outer_radius : flt
-           Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
-       acube, bcube : 3d array
-           User can supply already stacked and aligned image cubes and skip the alignment step.
-           
-       Returns:
-       --------
-       acube, bcube : 3d arr
-           cube of images of Star A and B ready to be put into KLIP reduction pipeline.
+    Parameters:
+    -----------
+    k : Pandas array
+        Pandas array made from the output of bditools.findstars_in_dataset.  
+        Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb'].  If
+        acube,bcube are supplied, this will be a dummy variable.
+    boxsize : int
+        size of box to draw around star psfs for DAOStarFinder
+    path_prefix : int
+        string to put in front of filenames in input file in case the relative
+        location of files has changed.
+    verbose : bool
+        if True, print status updates
+    normalize : bool
+        if True, normalize each image science and reference image integrated flux by dividing by each image
+        by the sum of all pixels in image.  If False do not normalize images. Default = True
+    normalizebymask : bool
+        if True, normalize using only the pixels in a specified radius to normalize.  Default = False
+    normalize_radius : flt
+        if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
+    inner_mask_core : bool
+        if True, set all pixels within mask_radius to value of 0 in all images.  Default = True
+    inner_mask_format : str
+        request inner core mask in lamdba/D or pixels.  Default = lambda/D
+    inner_mask_radius : flt
+        radius of inner mask in L/D or pixels.  Default = 1. lamdba/D
+    mask_outer_radius : flt
+        Set all pixels within this radius to 0 if mask_core set to True.  Must be units of lambda/D.
+    mask_outer_annulus: bool
+        if True, set all pixels outside the specified radius to zero.  Default = True.
+    outer_radius : flt
+        Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
+    subtract_radial_profile : bool
+        If True, subtract the median radial profile from each image in the cubes.  Default = True.
+    acube, bcube : 3d array
+        User can supply already stacked and aligned image cubes and skip the alignment step.
+        
+    Returns:
+    --------
+    3d arr, 3d arr
+        cube of images of Star A and B ready to be put into KLIP reduction pipeline.
     '''
-    if not acube:
+    if np.size(acube) == 1:
+        # collect and align postage stamps of each star:
         from cliotools.bditools import ab_stack_shift
         astack, bstack = ab_stack_shift(k, boxsize = boxsize,  path_prefix=path_prefix, verbose = verbose)
     else:
+        # copy user-supplied cubes:
         astack, bstack = acube.copy(),bcube.copy()
+        if astack.shape[0] != bstack.shape[0]:
+            # if using different set of images as basis set, limit the size
+            # of the two cubes to the smallest image set:
+            minsize = np.min([astack.shape[0],bstack.shape[0]])
+            astack = astack[:minsize]
+            bstack = bstack[:minsize]
+    # define center of images:
     center = (0.5*((astack[0].shape[0])-1),0.5*((astack[0].shape[1])-1))
+    ######## Normalize ###########
     if normalize:
         from cliotools.bditools import normalize_cubes
-        # Normalize cubes:
-        acube,bcube = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalize_radius)
+        astack2,bstack2 = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalize_radius)
+    else:
+        astack2,bstack2 = astack.copy(),bstack.copy()
+    ####### Inner mask ###########
     if inner_mask_core:
         from cliotools.bditools import mask_star_core
-        # Set all pixels within a radius of the center to zero:
-        acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_star_core(acube2, bcube2, inner_mask_radius,center[0], center[1], 
+        # Set all pixels within a radius of the center to cval:
+        astack3,bstack3 = mask_star_core(astack2, bstack2, inner_mask_radius,center[0], center[1], 
                                     radius_format = inner_radius_format, cval = cval)
+    else:
+        astack3,bstack3 = astack2.copy(),bstack2.copy()
+    ######## Outer mask ##########
     if outer_mask_annulus:
         from cliotools.bditools import mask_outer
-        if outer_mask_radius == None:
+        # Set all pixels exterior to a radius of the center to cval:
+        if not outer_mask_radius:
             raise ValueError('Outer radius must be specified if mask_outer_annulus == True')
-        acube2,bcube2 = acube.copy(),bcube.copy()
-        acube,bcube = mask_outer(acube2, bcube2, outer_mask_radius, center[0], center[1], radius_format = outer_radius_format, cval = cval)
-    return acube,bcube
+        astack4,bstack4 = mask_outer(astack3, bstack3, outer_mask_radius, center[0], center[1], radius_format = outer_radius_format, cval = cval)
+    else:
+        astack4,bstack4 = astack3.copy(),bstack3.copy()
+    ######## Radial Profile ##########
+    if subtract_radial_profile:
+        from cliotools.bditools import radial_subtraction_of_cube
+        if inner_mask_core:
+            exclude_r = inner_mask_radius
+        else:
+            exclude_r = 0.
+        if outer_mask_annulus:
+            exclude_outer = outer_mask_radius
+        else:
+            exclude_outer = astack4[0].shape[0]
+
+        astack5 = radial_subtraction_of_cube(astack4, exclude_r = exclude_r, exclude_outer = exclude_outer, update_prog = False)
+        bstack5 = radial_subtraction_of_cube(bstack4, exclude_r = exclude_r, exclude_outer = exclude_outer, update_prog = False)
+    else:
+        astack5,bstack5 = astack4.copy(),bstack4.copy()
+
+    return astack5, bstack5
 
 
 
-def normalize_cubes(astack,bstack, normalizebymask = False,  radius = []):
-    '''
-       Parameters:
-       ----------
-       astack, bstack : 3d array
-           cube of unnormalized images
-       normalizebymask : bool
-           if True, normalize using only the pixels in a specified radius to normalize.  Default = False
-       radius : flt
-           if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
-           
-       Returns:
-       --------
-       acube, bcube : 3d arr
-           cube of normalized images
+def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
+    ''' Normalize each image in a cube.
+
+    Parameters:
+    ----------
+    astack, bstack : 3d array
+        cube of unnormalized images
+    normalizebymask : bool
+        if True, normalize using only the pixels in a specified radius to normalize.  Default = False
+    radius : flt
+        if normalizebymask = True, set the radius of the aperture mask.  Must be in units of lambda/D.
+        
+    Returns:
+    --------
+    3d arr
+        cube of normalized images
     '''
     a,b = astack.copy(),bstack.copy()
     for i in range(astack.shape[0]):
@@ -635,24 +673,25 @@ def normalize_cubes(astack,bstack, normalizebymask = False,  radius = []):
 
 def mask_star_core(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 0):
     ''' Set the core of the star flux to zero pixel value
-       Parameters:
-       ----------
-       astack, bstack : 3d array
-           cube of unnormalized images
-       radius : flt
-           Exclude pixels interior to this radius  
-       xc, yc : flt
-           x/y of star center
-       mask_format : str
-           What quantity is the requested mask radius. Either 'lamdba/D' or 'pixels'.  Default = 'pixels'.
-       cval : flt or nan
-           value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
-           the reduction step.
-           
-       Returns:
-       --------
-       anans, bnans : 3d arr
-           cube of normalized images
+
+    Parameters:
+    ----------
+    astack, bstack : 3d array
+        cube of unnormalized images
+    radius : flt
+        Exclude pixels interior to this radius  
+    xc, yc : flt
+        x/y of star center
+    mask_format : str
+        What quantity is the requested mask radius. Either 'lamdba/D' or 'pixels'.  Default = 'pixels'.
+    cval : flt or nan
+        value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
+        the reduction step.
+        
+    Returns:
+    --------
+    3d arr
+        cube of normalized images
     '''
     shape = astack[0].shape
     xx,yy = np.meshgrid(np.arange(shape[0])-xc,np.arange(shape[1])-yc)
@@ -673,24 +712,25 @@ def mask_star_core(astack, bstack, radius, xc, yc, radius_format = 'pixels', cva
 
 def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 0):
     ''' Set the core of the star flux to zero pixel value
-       Parameters:
-       ----------
-       astack, bstack : 3d array
-           cube of images
-       radius : flt
-           Exclude pixels exterior to this radius
-       xc, yc : flt
-           x/y of star center
-       radius_format : str
-           How to handle requested outer annulus mask radius. Either 'pixels' or 'lambda/D'.
-       cval : flt or nan
-           value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
-           the reduction step.
-           
-       Returns:
-       --------
-       anans, bnans : 3d arr
-           cube of normalized images
+
+    Parameters:
+    ----------
+    astack, bstack : 3d array
+        cube of images
+    radius : flt
+        Exclude pixels exterior to this radius
+    xc, yc : flt
+        x/y of star center
+    radius_format : str
+        How to handle requested outer annulus mask radius. Either 'pixels' or 'lambda/D'.
+    cval : flt or nan
+        value to fill masked pixels.  Warning: if set to nan, this will cause problems in 
+        the reduction step.
+        
+    Returns:
+    --------
+    3d arr
+        cube of normalized images
     '''
     shape = astack[0].shape
     xx,yy = np.meshgrid(np.arange(shape[0])-xc,np.arange(shape[1])-yc)
@@ -708,6 +748,56 @@ def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 
         anans[i][np.where(r>radius)] = cval
         bnans[i][np.where(r>radius)] = cval
     return anans,bnans
+
+def radial_subtraction_of_cube(cube, exclude_r = 5., exclude_outer = 50., update_prog = True):
+    ''' Subtract radial profile (median value in an annulus extending from the center) from each image
+    in a cube of images.  Uses the radial profile script by Ian Crossfield found here:
+    https://www.astrobetter.com/wiki/python_radial_profiles
+
+    Parameters:
+    ----------
+    cube : 3d array
+        cube of images
+    exclude_r : flt
+        Exclude pixels interior to this radius.  Default = 5
+    exclude_outer : flt
+        Exclude pixels exterior to this radius.  Default = 50
+    update_prog : bool
+        If True, show progress bar of applying subtraction to images in cube.  Default = True
+        
+    Returns:
+    --------
+    3d arr
+        cube of radial profile subtracted images
+
+    Written by Logan Pearce 2020, with functions borrowed from Ian Crossfield 2010
+    '''
+    from cliotools.bditools import update_progress
+    from cliotools.miscellany import radial_data
+    Nimages = cube.shape[0]
+    radsub = cube.copy()
+    center = (cube[0].shape[1]/2, cube[0].shape[0]/2)
+    for N in range(Nimages):
+        RadialProfile = radial_data(cube[N]).median
+        inds = np.arange(len(RadialProfile))
+        # for each pixel:
+        for i in range(cube[0].shape[0]):
+            for j in range(cube[0].shape[1]):
+                # compute distance of pixel from center:
+                d = np.hypot(i - center[0], j - center[1])
+                # if the pixel is outside the masked region, and 
+                # within 50 pixels of center (the region we have radial prof for):
+                if d > exclude_r and d < exclude_outer:
+                    # Find the index of radial profile closest to that
+                    # pixel's distance:
+                    ind = (np.abs(d-inds)).argmin()
+                    # get the value of median radial profile at that distance
+                    # and subtract from the pixel's values
+                    if not np.isnan(RadialProfile[ind]):
+                        radsub[N][j,i] = cube[N][j,i] - RadialProfile[ind]
+        if update_prog:
+            update_progress(N+1,Nimages)
+    return radsub
                 
 def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
     """ Make a header for writing psf sub BDI KLIP cubes to fits files
@@ -743,49 +833,49 @@ def psf_subtract(scienceimage, ref_psfs, K_klip, covariances = None, use_basis =
     """Build an estimator for the psf of a BDI science target image from a cube of reference psfs 
        (use the ab_stack_shift function).  Follows steps of Soummer+ 2012 sec 2.2
        
-       Written by Logan A. Pearce, 2020
-       Heavily influenced by the lovely coding over at PyKLIP (https://pyklip.readthedocs.io/en/latest/)
-       
-       Dependencies: numpy, image_registration, scipy
+    Written by Logan A. Pearce, 2020
+    Heavily influenced by the lovely coding over at PyKLIP (https://pyklip.readthedocs.io/en/latest/)
 
-       Parameters:
-       -----------
-       scienceimage : 2d array
-           science target image of shape mxn
-       ref_psfs : 3d array
-           reference psfs array of shape Nxmxn where N = number of reference psfs
-       K_klip : int or arr
-           Number of basis modes desired to use.  Can be integer or array of len b
-       covariances : arr
-           covariance matrix for ref psfs can be passed as an argument to avoid needing
-           to calculate it
-       basis : 3d arr
-           psf basis modes (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
-           to calculate it
-       return_estimator : bool
-           if set to True, return the estimated psf(s) used to subtract from the science target
-           
-       Returns:
-       --------
-        if (return_cov and return_basis) is True:
-            return outputimage, Z, immean, cov, lamb, c
-        elif return_basis:
-            return outputimage, Z, immean
-        elif return_cov:
-            return outputimage, cov
-        else:
-            return outputimage
+    What is returned based on keywords:
+    if (return_cov and return_basis) is True:
+        return outputimage, Z, immean, cov, lamb, c
+    elif return_basis:
+        return outputimage, Z, immean
+    elif return_cov:
+        return outputimage, cov
+    else:
+        return outputimage
+    
+    Dependencies: numpy, image_registration, scipy
 
-       outputimage : bxmxn arr
-           psf subtracted image
-       Z : Nxp arr
-           psf model basis modes (if return_basis = True)
-       immean : mxn arr
-           mean image that accompanies basis set Z (if return_basis = True)
-       cov : NxN arr
-           return the computed covariance matrix is return_cov = True. So it can be used in future
-           calcs without having to recalculate
-
+    Parameters:
+    -----------
+    scienceimage : 2d array
+        science target image of shape mxn
+    ref_psfs : 3d array
+        reference psfs array of shape Nxmxn where N = number of reference psfs
+    K_klip : int or arr
+        Number of basis modes desired to use.  Can be integer or array of len b
+    covariances : arr
+        covariance matrix for ref psfs can be passed as an argument to avoid needing
+        to calculate it
+    basis : 3d arr
+        psf basis modes (Z of Soummer 2.2.2) for star A or B can be passed as an argument to avoid needing
+        to calculate it
+    return_estimator : bool
+        if set to True, return the estimated psf(s) used to subtract from the science target
+        
+    Returns:
+    --------
+    bxmxn arr
+        psf subtracted image
+    Nxp arr
+        psf model basis modes (if return_basis = True)
+    mxn arr
+        mean image that accompanies basis set Z (if return_basis = True)
+    NxN arr
+        return the computed covariance matrix is return_cov = True. So it can be used in future
+        calcs without having to recalculate
     """
     from scipy import ndimage
     import image_registration
@@ -967,6 +1057,10 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     from cliotools.bditools import rotate_clio, psfsub_cube_header, psf_subtract, normalize_cubes
     from astropy.stats import sigma_clip
 
+    # If single value of K_klip provided, make into array to prevent
+    # later issues:
+    if type(K_klip) == int:
+        K_klip = np.array([K_klip])
     N = acube.shape[0]
     if N < np.max(K_klip):
         if verbose:
@@ -982,10 +1076,6 @@ def SubtractCubes(acube, bcube, K_klip, k,\
     a_final = np.zeros([np.size(K_klip),a0_rot.shape[0],a0_rot.shape[1]])
     b_final = np.zeros(a_final.shape)
     
-    # If single value of K_klip provided, make into array to prevent
-    # later issues:
-    if type(K_klip) == int:
-        K_klip = np.array([K_klip])
     # For each KL mode cutoff value:
     for j in range(np.size(K_klip)):
         ############### star A: ##################
@@ -1051,228 +1141,20 @@ def do_bdi(k, K_klip, **kwargs):
 
 ##########################################################################
 #  Functions for injecting synthetic planet signals                      #
-
-def mag(image, x, y, radius = 9., returnflux = False, returntable = False):
-    ''' Compute instrument magnitudes of one object.  Defaults are set to CLIO 3.9um optimal.
-        Parameters:
-        -----------
-        image : 2d array
-            science image
-        x,y : flt
-            x and y pixel location of center of star
-        radius : flt
-            pixel radius for aperture.  Default = 9, approx location of 1st null in
-            CLIO 3.9um 
-        r_in, r_out : flt
-            inside and outside radius for background annulus.  Default = 10,12
-        returnflux : bool
-            if true, return the instrument mag and the raw flux value.
-        returntable : bool
-            if true, return the entire photometry table.
-        Returns:
-        --------
-        mag : flt
-            instrument magnitudes of source
-        snr : flt
-            signal to noise ratio
-    '''
-    from photutils import CircularAperture, CircularAnnulus, aperture_photometry
-    # Position of star:
-    positions = [(x,y)]
-    # Get sum of all pixel values within radius of center:
-    aperture = CircularAperture(positions, r=radius)
-    # Do photometry on star:
-    phot_table = aperture_photometry(image, aperture)
-    m =(-2.5)*np.log10(phot_table['aperture_sum'][0])
-    if returnflux:
-        return m, phot_table['aperture_sum'][0]
-    if returntable:
-        phot_table['Mag'] = m
-        return m, phot_table
-    return m
-
-def contrast(image1,image2,pos1,pos2,**kwargs):
-    ''' Return contrast of component 2 relative to 1 in magnitudes
-        Parameters:
-        ------------
-        image1 : 2d array
-            science image
-        image2 : 2d array
-            image of other object
-        pos1 : arr
-            x and y pixel location of center of star1 in order [x1,y1]
-        pos2 : arr
-            x and y pixel location of center of star2 in order [x2,y2]
-        kwargs : 
-            args to pass to mag function
-        Returns:
-        --------
-        contrast : flt
-            contrast in magnitudes of B component relative to A component
-        
-    '''
-    from cliotools.bditools import mag
-    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)
-    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)
-    return mag2 - mag1
-
-def makeplanet(template, C, TC):
-    ''' Make a simulated planet psf with desired contrast using template psf
-        Parameters:
-        -----------
-        template : 2d image
-            sample PSF for making simulated planet
-        C : flt
-            desired contrast in magnitudes
-        TC : flt
-            known contrast of template psf relative to science target
-        Returns:
-        --------
-        Pflux : 2d image
-            scaled simulated planet psf with desired contrast to science target
-    '''
-    # Amount of magnitudes to scale template by to achieve desired
-    # contrast with science target:
-    D = C - TC
-    # Convert to flux:
-    scalefactor = 10**(-D/2.5)
-    # Scale template pixel values:
-    Pflux = template*scalefactor
-    return Pflux
-
-def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc, 
-                 sepformat = 'lambda/D', 
-                 pixscale = 15.9,
-                 wavelength = 'none',
-                 box = 70
-                ):
-    ''' Using a template psf, place a fake planet at the desired sep, pa, and
-        contrast from the central object.  PA is measured relative to true north
-        (rather than up in image)
-        Parameters:
-        -----------
-        image : 2d array
-            science image
-        imhdr : fit header
-            science image header
-        template : 2d array
-            template psf with known contrast to central object
-        sep : flt or fltarr
-            separation of planet placement in either arcsec, mas, pixels, or lambda/D
-        pa : flt or fltarr
-            position angle of planet relative to north in DEG
-        contrast : flt or fltarr
-            desired contrast of planet with central object
-        TC : flt
-            template contrast, known contrast of template psf relative to science target
-        xc, yc : flt
-            x,y pixel position of central object
-        sepformat : str
-            format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
-            Default = 'pixels'
-        pixscale : flt
-            pixelscale in mas/pixel.  Default = 15.9 mas/pix, pixscale for CLIO narrow camera
-        wavelength : flt
-            central wavelength of filter, needed if sepformat = 'lambda/D'
-        box : int
-            size of template box.  Template will be box*2 x box*2
-        
-        Returns:
-        --------
-        synth : 2d array
-            image with fake planet with desired parameters. 
-    '''
-    from cliotools.bditools import makeplanet
-    # sep input into pixels
-    if sepformat == 'arcsec':
-        pixscale = pixscale/1000 # convert to arcsec/pix
-        sep = sep / pixscale
-    if sepformat == 'mas':
-        sep = sep / pixscale
-    if sepformat == 'lambda/D':
-        from cliotools.cliotools import lod_to_pixels
-        if wavelength == 'none':
-            raise ValueError('wavelength input needed if sepformat = lambda/D')
-        sep = lod_to_pixels(sep, wavelength)
-    # pa input - rotate from angle relative to north to angle relative to image up:
-    #    do the opposite of what you do to derotate images
-    NORTH_CLIO = -1.80
-    derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
-    pa = (pa + derot)
-        
-    # Get cartesian location of planet:
-    xx = sep*np.sin(np.radians((pa)))
-    yy = sep*np.cos(np.radians((pa)))
-    xs = np.int_(np.floor(xc-xx))
-    ys = np.int_(np.floor(yc+yy))
-    # Make planet from template at desired contrast
-    Planet = makeplanet(template, contrast, TC)
-    # Make copy of image:
-    synth = image.copy()
-    # Get shape of template:
-    boxy, boxx = np.int_(Planet.shape[0]/2),np.int_(Planet.shape[1]/2)
-    x,y = xs,ys
-    ymin, ymax = y-boxy, y+boxy
-    xmin, xmax = x-boxx, x+boxx
-    # Correct for sources near image edge:
-    delta = 0
-    if ymin < 0:
-        delta = ymin
-        ymin = 0
-        Planet = Planet[(0-delta):,:]
-    if ymax > image.shape[0]:
-        delta = ymax - image.shape[0]
-        ymax = image.shape[0]
-        Planet = Planet[:(2*boxy-delta) , :]
-    if xmin < 0:
-        delta = xmin
-        xmin = 0
-        Planet = Planet[:,(0-delta):]
-    if xmax > image.shape[1]:
-        delta = xmax - image.shape[1]
-        xmax = image.shape[1]
-        Planet = Planet[:,:(2*boxx-delta)]
-    # account for integer pixel positions:
-    if synth[ymin:ymax,xmin:xmax].shape != Planet.shape:
-        try:
-            synth[ymin:ymax+1,xmin:xmax] = synth[ymin:ymax+1,xmin:xmax] + (Planet)
-        except:
-            synth[ymin:ymax,xmin:xmax+1] = synth[ymin:ymax,xmin:xmax+1] + (Planet)
-    else:
-        synth[ymin:ymax,xmin:xmax] = synth[ymin:ymax,xmin:xmax] + (Planet)
-    return synth
-
-def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, **kwargs):
-    ''' Wrapper for injectplanet() that allows for multiple fake planets in one image.
-        Parameters are same as injectplanet() except sep, pa, and contrast must all be
-        arrays of the same length.  **kwargs are passed to injectplanet().
-    '''
-    from cliotools.bditools import injectplanet
-    synth = image.copy()
-    try:
-        for i in range(len(sep)):
-            synth1 = injectplanet(synth, imhdr, template, sep[i], pa[i], contrast[i], TC, xc, yc, 
-                                      **kwargs)
-            synth = synth1.copy()
-    except:
-        synth = injectplanet(synth, imhdr, template, sep, pa, contrast, TC, xc, yc, 
-                                      **kwargs)
-    return synth
-
-
-
-########### Perform KLIP on injected planet signals ##########################
-
-def DoInjection(path, Star, K_klip, sep, pa, C,
+from cliotools.bdi_signal_injection_tools import *
+def DoInjection_deprecated(path, Star, K_klip, sep, pa, C,
                 sepformat = 'lambda/D', box = 100, 
                 template = [], TC = None, use_same = True, verbose = True,
                 # Params for handling KLIP bases:
                 returnZ = False, Z = [], immean = [],
                 # Params for user supplied image cubes:
                 returnstamps = False, sciencecube = [], refcube = [], templatecube = [],
+                return_synthcube = False,
                 # Params for preparing images for KLIP:
                 normalize = True, normalizebymask = False,  normalize_radius = [],
-                mask_core = True, mask_radius = 1.
+                mask_core = True, mask_radius = 10.,
+                mask_outer_annulus = True, outer_mask_radius = 50., outer_radius_format = 'pixels',cval = 0.0,
+                interp = 'bicubic'
                     ):
     ''' Inject fake planet signal into images of Star 1 using Star 2 as template (or user
         supplied template) in all images in a dataset, and perform KLIP reduction and psf subtraction
@@ -1373,21 +1255,24 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
             refcube = bstamp.copy()
         elif Star == 'B':
             refcube = astamp.copy()
-                
+    
+    box = templatecube.shape[1] / 2
+
     # Inject planet signal into science target star
     synthcube = np.zeros(np.shape(sciencecube))
     from cliotools.bditools import injectplanets
     if not len(template):
         # If template PSF is not provided by user (this is most common):
+        from cliotools.bditools import contrast
         for i in range(sciencecube.shape[0]):
-            from cliotools.bditools import contrast
             # Get template constrast of refcube to sciencecube
-            TC = contrast(sciencecube[i],templatecube[i],[box+0.5,box+0.5],[box+0.5,box+0.5])
+            center = (0.5*((sciencecube.shape[2])-1),0.5*((sciencecube.shape[1])-1))
+            TC = contrast(sciencecube[i],templatecube[i],center,center)
             # image header must be provided to 
             # accomodate rotation from north up reference got PA to image reference:
             imhdr = fits.getheader(k['filename'][i]) 
             # Inject the desired signal into the science cube:
-            synth = injectplanets(sciencecube[i], imhdr, templatecube[i], sep, pa, C, TC, box, box, 
+            synth = injectplanets(sciencecube[i], imhdr, templatecube[i], sep, pa, C, TC, center[0], center[1], 
                                           sepformat = sepformat, wavelength = 3.9, box = box)
             # place signal-injected image into stack of images:
             synthcube[i,:,:] = synth
@@ -1399,7 +1284,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
         # inject signal:
         for i in range(sciencecube.shape[0]):
             imhdr = fits.getheader(k['filename'][i])
-            synth = injectplanets(sciencecube[i], imhdr, template, sep, pa, C, TC, box, box, 
+            synth = injectplanets(sciencecube[i], imhdr, template, sep, pa, C, TC, center[0], center[1], 
                                           sepformat = sepformat, wavelength = 3.9, box = box)
             synthcube[i,:,:] = synth
     
@@ -1407,10 +1292,23 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
     # Normalize and mask both science target with injected signal, and reference star basis set:    
     from cliotools.bditools import normalize_cubes, mask_star_core
     if normalize:
-        synthcube,refcube = normalize_cubes(synthcube, refcube, normalizebymask = False)
+        synthcube1,refcube1 = normalize_cubes(synthcube.copy(),refcube.copy(), normalizebymask = False)
+    else:
+        synthcube1,refcube1 = synthcube.copy(),refcube.copy()
     if mask_core:
-        synthcube,refcube = mask_star_core(synthcube, refcube, mask_radius, synthcube[0].shape[0]/2, \
-                                       synthcube[0].shape[1]/2)
+        synthcube2,refcube2 = mask_star_core(synthcube1.copy(),refcube1.copy(), mask_radius, center[0], \
+                                       center[1])
+    else:
+        synthcube2,refcube2 = synthcube1.copy(),refcube1.copy()
+    if mask_outer_annulus:
+        from cliotools.bditools import mask_outer
+        # Set all pixels exterior to a radius of the center to cval:
+        if not outer_mask_radius:
+            raise ValueError('Outer radius must be specified if mask_outer_annulus == True')
+        synthcube,refcube = mask_outer(synthcube2.copy(),refcube2.copy(), outer_mask_radius, center[0], center[1], radius_format = outer_radius_format, cval = cval)
+    else:
+        synthcube,refcube = synthcube2.copy(),refcube2.copy()
+
             
     if not len(Z):
         # Use psf subtraction function to build a basis from opposite star, and
@@ -1435,7 +1333,7 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
                              mean_image = immean, verbose = True)
         # rotate:
         imhdr = fits.getheader(k['filename'][i])
-        Frot = rotate_clio(F[0], imhdr, order = 4, reshape = False, mode='constant', cval=np.nan)
+        Frot = rotate_clio(F[0], imhdr, center = None, interp = 'bicubic', bordermode = 'constant', cval = 0, scale = 1)
         klipcube[i,:,:] = Frot
     from astropy.stats import sigma_clip
     # Take sigma-clipped mean:
@@ -1446,73 +1344,16 @@ def DoInjection(path, Star, K_klip, sep, pa, C,
     if returnstamps:
         return kliped, astamp, bstamp
     if returnZ:
-        return kliped, Z
+        return kliped, Z, immean
+    if return_synthcube:
+        return kliped, synthcube, refcube
     return kliped
 
-def getsnr(image, sep, pa, xc, yc, wavelength = 3.9):
-    ''' Get SNR of injected planet signal using method and Student's T-test
-        statistics described in Mawet 2014
-        Parameters:
-        -----------
-        image : 2d arr
-            KLIP reduced image with injected planet signal at (sep,pa)
-        sep : flt
-            separation of injected signal in L/D units
-        pa : flt
-            position angle of inject signal relative to north in degrees
-        xc, yc : flt or int
-            (x,y) pixel location of center of star
-        wavelength : flt
-            central wavelength in microns of image filter. Used for converting 
-            from L/D units to pixels.  Default = 3.9
-            
-    '''
-    from cliotools.cliotools import lod_to_pixels
-    from photutils import CircularAperture, aperture_photometry
-    radius = lod_to_pixels(1., wavelength)/2
-    lod = 2*radius
-    # convert sep in L/D to pixels:
-    seppix = lod_to_pixels(sep, wavelength)
-    # Number of 1L/D apertures that can fit on the circumference at separation:
-    Napers = np.floor(sep*2*np.pi)
-    # Change in angle from center of one aper to the next:
-    dTheta = 360/Napers
-    # Create array around circumference, excluding the ones immediately before and after
-    # where the planet is:
-    pas = np.arange(pa+2*dTheta,pa+360-dTheta,dTheta)%360
-    # create emptry container to store results:
-    noisesums = np.zeros(len(pas))
-    # for each noise aperture:
-    for i in range(len(pas)):
-        # lay down a photometric aperture at that point:
-        xx = seppix*np.sin(np.radians((pas[i])))
-        yy = seppix*np.cos(np.radians((pas[i])))
-        xp,yp = xc-xx,yc+yy
-        aperture = CircularAperture([xp,yp], r=radius)
-        # sum pixels in aperture:
-        phot = aperture_photometry(image, aperture)
-        # add to noise container:
-        noisesums[i] = phot['aperture_sum'][0]
-    # the noise value is the std dev of pixel sums in each
-    # noise aperture:
-    noise = np.std(noisesums)
-    # Compute signal of injected planet in signal aperture:
-    xx = seppix*np.sin(np.radians((pa)))
-    yy = seppix*np.cos(np.radians((pa)))
-    xp,yp = xc-xx,yc+yy
-    # Lay down aperture at planet location:
-    aperture = CircularAperture([xp,yp], r=radius)
-    # compute pixel sum in that location:
-    phot = aperture_photometry(image, aperture)
-    signal = phot['aperture_sum'][0]
-    # compute mean background:
-    bkgd = np.mean(noisesums)
-    # Eqn 9 in Mawet 2014:
-    signal = signal - bkgd
-    snr = signal / ( noise * np.sqrt(1+ (1/np.size(pas))) )
-    return snr
 
-def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returnsnrs = False, writeklip = True, verbose = False,  update_prog = True, use_same = True,
+def DoSNR_deprecated(path, Star, K_klip, sep, C, sepformat = 'lambda/D', 
+            box = 100, returnsnrs = False, writeklip = True, 
+            verbose = False,  update_prog = True, use_same = True,
+            sciencecube = [], refcube = [], templatecube = [],
          **kwargs):
     ''' For a single value of separation and contrast of an injected planet signal around Star A/B, 
         compute the SNR using the method in Mawet 2014.  kwargs are fed to DoInjection
@@ -1556,8 +1397,6 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
     from cliotools.bditools import DoInjection, getsnr
     # Define starting point pa:
     pa = 270.
-    # define center of box (location of star):
-    xc,yc = box-1,box-1
     # Number of 1L/D apertures that can fit on the circumference at separation:
     Napers = np.floor(sep*2*np.pi)
     # Change in angle from one aper to the next:
@@ -1568,10 +1407,31 @@ def DoSNR(path, Star, K_klip, sep, C, sepformat = 'lambda/D', box = 100, returns
     # create empty container to store results:
     snrs = np.zeros(len(pas))
     
-    # Do initial run on 1st pa location to create stamps and KLIP basis set:
-    kliped, Z, immean, astamp, bstamp = DoInjection(path, Star, K_klip, sep, pa, C, 
-                    sepformat = sepformat, box = box, 
-                    verbose = verbose, returnZ = True, returnstamps = True, use_same = use_same, **kwargs)
+    if np.size(sciencecube) == 1:
+        # Do initial run on 1st pa location to create stamps and KLIP basis set:
+        kliped, Z, immean, astamp, bstamp = DoInjection(path, Star, K_klip, sep, pa, C,  
+                        sepformat = sepformat, box = box, 
+                        verbose = verbose, returnZ = True, returnstamps = True, use_same = use_same, **kwargs)
+    else:
+        kliped, Z, immean = DoInjection(path, Star, K_klip, sep, pa, C, return_synthcube = False,
+                                     returnZ = True,
+                                     sciencecube = sciencecube,
+                                     refcube = refcube,
+                                     templatecube = templatecube,
+                                     returnstamps = False,
+                                     use_same = use_same, **kwargs)
+
+        if Star == 'A':
+            astamp = sciencecube.copy()
+            bstamp = refcube.copy()
+        elif Star == 'B':
+            bstamp = sciencecube.copy()
+            astamp = refcube.copy()
+
+    # define center of box (location of star):
+    xc,yc = (0.5*((astamp.shape[2])-1),0.5*((astamp.shape[1])-1))
+
+
     if writeklip:
         from astropy.io import fits
         name = path+'/injectedsignal_star'+Star+'_sep'+'{:.0f}'.format(sep)+'_C'+'{:.1f}'.format(C)+'.fit'
@@ -1626,31 +1486,31 @@ def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), c
                    cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
                    fontsize=15, plotstyle = 'magrathea'):
     
-    """ After running DoSNR for a range of seps and contrasts, generate a map of SNR
+    """After running DoSNR for a range of seps and contrasts, generate a map of SNR
         with contours at some intervals for contrast curves.  Uses scipy interpolate to
         expand sep/C to a square matrix and fill in intervals in what was tested.
 
-        Parameters:
-        -----------
-        path : str
-            dataset folder
-        Star : 'A' or 'B'
-            which star had the signal injection
-        sep, C : 1d arr
-            arrays of separations and contrasts that were tested in the 
-            DoSNR run
-        curves_file : str
-            string of the pickle file containing the output from the DoSNR run.
-            If blank, assumes the file is named path/snrs[STAR].pkl
-        Ncontours_cmap : int
-            number of contours to draw and fill for the SNR map
-        Ncontours_label : int
-            number of contours to draw and label ontop of the map
+    Parameters
+    -----------
+    path : str
+        dataset folder
+    Star : 'A' or 'B'
+        which star had the signal injection
+    sep, C : 1d arr
+        arrays of separations and contrasts that were tested in the 
+        DoSNR run
+    curves_file : str
+        string of the pickle file containing the output from the DoSNR run.
+        If blank, assumes the file is named path/snrs[STAR].pkl
+    Ncontours_cmap : int
+        number of contours to draw and fill for the SNR map
+    Ncontours_label : int
+        number of contours to draw and label ontop of the map
 
-        Returns
-        -------
-        fig : matplotlib figure object
-            snr plot
+    Returns
+    -------
+    figure
+        snr plot
         
     """
     from scipy import interpolate
@@ -1665,7 +1525,7 @@ def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), c
         f = interpolate.interp1d(sep, snrs[i])
         newSNR = f(resep)
         newSNRs[i] = newSNR
-        
+
     try:
         plt.style.use(plotstyle)
     except:
@@ -2279,3 +2139,69 @@ def ab_stack_shift_deprecated(k, boxsize = 20, path_prefix='', verbose = True,
                 bstamp = bstamp[:count,:,:]
                 return astamp, bstamp
     return astamp, bstamp
+
+
+
+
+
+def contrast_curve_deprecated(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
+                   cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
+                   fontsize=15, plotstyle = 'magrathea'):
+    
+    """ After running DoSNR for a range of seps and contrasts, generate a map of SNR
+        with contours at some intervals for contrast curves.  Uses scipy interpolate to
+        expand sep/C to a square matrix and fill in intervals in what was tested.
+
+        Parameters:
+        -----------
+        path : str
+            dataset folder
+        Star : 'A' or 'B'
+            which star had the signal injection
+        sep, C : 1d arr
+            arrays of separations and contrasts that were tested in the 
+            DoSNR run
+        curves_file : str
+            string of the pickle file containing the output from the DoSNR run.
+            If blank, assumes the file is named path/snrs[STAR].pkl
+        Ncontours_cmap : int
+            number of contours to draw and fill for the SNR map
+        Ncontours_label : int
+            number of contours to draw and label ontop of the map
+
+        Returns
+        -------
+        fig : matplotlib figure object
+            snr plot
+        
+    """
+    from scipy import interpolate
+    if not len(curves_file):
+        snrs = pickle.load( open( path+"snrs"+Star+".pkl", "rb" ) )
+    else:
+        snrs = pickle.load( open( path+curves_file, "rb" ) )
+    resep = np.linspace(np.min(sep),np.max(sep),len(C))
+    m = np.max([len(sep),len(C)])
+    newSNRs = np.zeros((m,m))
+    for i in range(m):
+        f = interpolate.interp1d(sep, snrs[i])
+        newSNR = f(resep)
+        newSNRs[i] = newSNR
+        
+    try:
+        plt.style.use(plotstyle)
+    except:
+        plt.style.use('default')
+    fig = plt.figure()
+    contours = plt.contour(resep,C,newSNRs, Ncontours_label, colors='red',linestyles=(':',))
+    plt.clabel(contours, inline=True, fontsize=fontsize,fmt='%1.0f')
+    contour = plt.contour(resep,C,newSNRs,levels = [5.0],
+                     colors=('r',),linestyles=('-',),linewidths=(2,))
+    plt.clabel(contour, inline=True, fontsize=fontsize,fmt='%1.0f')
+    plt.contourf(resep,C,newSNRs,Ncontours_cmap,cmap=cmap)
+    plt.colorbar()
+    plt.gca().invert_yaxis()
+    plt.xlabel(r'Sep [$\frac{\lambda}{D}$]')
+    plt.ylabel('contrast [mags]')
+    plt.title(path.split('/')[0]+' '+Star)
+    return fig
