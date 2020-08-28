@@ -496,7 +496,6 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
     return astamp,bstamp
 
 
-
 def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
                    # normalizing parameters:\
                    normalize = True, normalizebymask = False,  normalize_radius = [],\
@@ -612,7 +611,6 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
         astack5,bstack5 = astack4.copy(),bstack4.copy()
 
     return astack5, bstack5
-
 
 
 def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
@@ -750,55 +748,28 @@ def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 
     return anans,bnans
 
 def radial_subtraction_of_cube(cube, exclude_r = 5., exclude_outer = 50., update_prog = True):
-    ''' Subtract radial profile (median value in an annulus extending from the center) from each image
-    in a cube of images.  Uses the radial profile script by Ian Crossfield found here:
-    https://www.astrobetter.com/wiki/python_radial_profiles
-
-    Parameters:
-    ----------
-    cube : 3d array
-        cube of images
-    exclude_r : flt
-        Exclude pixels interior to this radius.  Default = 5
-    exclude_outer : flt
-        Exclude pixels exterior to this radius.  Default = 50
-    update_prog : bool
-        If True, show progress bar of applying subtraction to images in cube.  Default = True
-        
-    Returns:
-    --------
-    3d arr
-        cube of radial profile subtracted images
-
-    Written by Logan Pearce 2020, with functions borrowed from Ian Crossfield 2010
-    '''
     from cliotools.bditools import update_progress
-    from cliotools.miscellany import radial_data
+    from cliotools.miscellany import radial_data_median_only, CenteredDistanceMatrix
+    from scipy.interpolate import interp1d
     Nimages = cube.shape[0]
     radsub = cube.copy()
-    center = (cube[0].shape[1]/2, cube[0].shape[0]/2)
+    # Create integer distance matrix
+    r = np.int_(CenteredDistanceMatrix(cube[0].shape[0]))
+    # For each image in cube:
     for N in range(Nimages):
-        RadialProfile = radial_data(cube[N]).median
-        inds = np.arange(len(RadialProfile))
-        # for each pixel:
-        for i in range(cube[0].shape[0]):
-            for j in range(cube[0].shape[1]):
-                # compute distance of pixel from center:
-                d = np.hypot(i - center[0], j - center[1])
-                # if the pixel is outside the masked region, and 
-                # within 50 pixels of center (the region we have radial prof for):
-                if d > exclude_r and d < exclude_outer:
-                    # Find the index of radial profile closest to that
-                    # pixel's distance:
-                    ind = (np.abs(d-inds)).argmin()
-                    # get the value of median radial profile at that distance
-                    # and subtract from the pixel's values
-                    if not np.isnan(RadialProfile[ind]):
-                        radsub[N][j,i] = cube[N][j,i] - RadialProfile[ind]
+        # Compute 1d median radial profile:
+        RadialProfile = radial_data_median_only(cube[N])
+        x = np.arange(np.max(r)+1)
+        # interpolate into 2d:
+        f = interp1d(x, RadialProfile)
+        p = f(np.int_(r.flat)).reshape(r.shape)
+        p[np.where(r<exclude_r)] = 0
+        p[np.where(r>exclude_outer)] = 0
+        radsub[N] = cube[N] - p
         if update_prog:
             update_progress(N+1,Nimages)
     return radsub
-                
+
 def psfsub_cube_header(dataset, K_klip, star, shape, stampshape):
     """ Make a header for writing psf sub BDI KLIP cubes to fits files
         in the subtract_cubes function
@@ -1129,19 +1100,79 @@ def SubtractCubes(acube, bcube, K_klip, k,\
         return a_final[0], b_final[0]
     else:
         return a_final, b_final
-'''
-def do_bdi(k, K_klip, **kwargs):
-    """Wrapper function for BDI psf subtraction functions
-    """
-    from cliotools.bditools import ab_stack_shift, subtract_cubes
-    # create postage stamp cubes:
-    astamp, bstamp = ab_stack_shift(k, **kwargs)
-    # psf subtract cubes
-    a_final, b_final = subtract_cubes(astamp, bstamp, K_klip, k, **kwargs)'''
+
 
 ##########################################################################
 #  Functions for injecting synthetic planet signals                      #
 from cliotools.bdi_signal_injection_tools import *
+
+
+def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
+                   cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
+                   fontsize=15, plotstyle = 'magrathea'):
+    
+    """After running DoSNR for a range of seps and contrasts, generate a map of SNR
+        with contours at some intervals for contrast curves.  Uses scipy interpolate to
+        expand sep/C to a square matrix and fill in intervals in what was tested.
+
+    Parameters
+    -----------
+    path : str
+        dataset folder
+    Star : 'A' or 'B'
+        which star had the signal injection
+    sep, C : 1d arr
+        arrays of separations and contrasts that were tested in the 
+        DoSNR run
+    curves_file : str
+        string of the pickle file containing the output from the DoSNR run.
+        If blank, assumes the file is named path/snrs[STAR].pkl
+    Ncontours_cmap : int
+        number of contours to draw and fill for the SNR map
+    Ncontours_label : int
+        number of contours to draw and label ontop of the map
+
+    Returns
+    -------
+    figure
+        snr plot
+        
+    """
+    from scipy import interpolate
+    if not len(curves_file):
+        snrs = pickle.load( open( path+"snrs"+Star+".pkl", "rb" ) )
+    else:
+        snrs = pickle.load( open( path+curves_file, "rb" ) )
+    resep = np.linspace(np.min(sep),np.max(sep),len(C))
+    m = np.max([len(sep),len(C)])
+    newSNRs = np.zeros((m,m))
+    for i in range(m):
+        f = interpolate.interp1d(sep, snrs[i])
+        newSNR = f(resep)
+        newSNRs[i] = newSNR
+
+    try:
+        plt.style.use(plotstyle)
+    except:
+        plt.style.use('default')
+    fig = plt.figure()
+    contours = plt.contour(resep,C,newSNRs, Ncontours_label, colors='red',linestyles=(':',))
+    plt.clabel(contours, inline=True, fontsize=fontsize,fmt='%1.0f')
+    contour = plt.contour(resep,C,newSNRs,levels = [5.0],
+                     colors=('r',),linestyles=('-',),linewidths=(2,))
+    plt.clabel(contour, inline=True, fontsize=fontsize,fmt='%1.0f')
+    plt.contourf(resep,C,newSNRs,Ncontours_cmap,cmap=cmap)
+    plt.colorbar()
+    plt.gca().invert_yaxis()
+    plt.xlabel(r'Sep [$\frac{\lambda}{D}$]')
+    plt.ylabel('contrast [mags]')
+    plt.title(path.split('/')[0]+' '+Star)
+    return fig
+    
+
+##########################################################################
+#              DEPRECATED                                                #
+
 def DoInjection_deprecated(path, Star, K_klip, sep, pa, C,
                 sepformat = 'lambda/D', box = 100, 
                 template = [], TC = None, use_same = True, verbose = True,
@@ -1481,72 +1512,6 @@ def DoSNR_deprecated(path, Star, K_klip, sep, C, sepformat = 'lambda/D',
         
     return np.mean(snrs)
 
-
-def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
-                   cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
-                   fontsize=15, plotstyle = 'magrathea'):
-    
-    """After running DoSNR for a range of seps and contrasts, generate a map of SNR
-        with contours at some intervals for contrast curves.  Uses scipy interpolate to
-        expand sep/C to a square matrix and fill in intervals in what was tested.
-
-    Parameters
-    -----------
-    path : str
-        dataset folder
-    Star : 'A' or 'B'
-        which star had the signal injection
-    sep, C : 1d arr
-        arrays of separations and contrasts that were tested in the 
-        DoSNR run
-    curves_file : str
-        string of the pickle file containing the output from the DoSNR run.
-        If blank, assumes the file is named path/snrs[STAR].pkl
-    Ncontours_cmap : int
-        number of contours to draw and fill for the SNR map
-    Ncontours_label : int
-        number of contours to draw and label ontop of the map
-
-    Returns
-    -------
-    figure
-        snr plot
-        
-    """
-    from scipy import interpolate
-    if not len(curves_file):
-        snrs = pickle.load( open( path+"snrs"+Star+".pkl", "rb" ) )
-    else:
-        snrs = pickle.load( open( path+curves_file, "rb" ) )
-    resep = np.linspace(np.min(sep),np.max(sep),len(C))
-    m = np.max([len(sep),len(C)])
-    newSNRs = np.zeros((m,m))
-    for i in range(m):
-        f = interpolate.interp1d(sep, snrs[i])
-        newSNR = f(resep)
-        newSNRs[i] = newSNR
-
-    try:
-        plt.style.use(plotstyle)
-    except:
-        plt.style.use('default')
-    fig = plt.figure()
-    contours = plt.contour(resep,C,newSNRs, Ncontours_label, colors='red',linestyles=(':',))
-    plt.clabel(contours, inline=True, fontsize=fontsize,fmt='%1.0f')
-    contour = plt.contour(resep,C,newSNRs,levels = [5.0],
-                     colors=('r',),linestyles=('-',),linewidths=(2,))
-    plt.clabel(contour, inline=True, fontsize=fontsize,fmt='%1.0f')
-    plt.contourf(resep,C,newSNRs,Ncontours_cmap,cmap=cmap)
-    plt.colorbar()
-    plt.gca().invert_yaxis()
-    plt.xlabel(r'Sep [$\frac{\lambda}{D}$]')
-    plt.ylabel('contrast [mags]')
-    plt.title(path.split('/')[0]+' '+Star)
-    return fig
-    
-
-##########################################################################
-#              DEPRECATED                                                #
 
 def rotate_clio_ndimage(image, imhdr, **kwargs):
     """Rotate CLIO image to north up east left.
@@ -2141,9 +2106,6 @@ def ab_stack_shift_deprecated(k, boxsize = 20, path_prefix='', verbose = True,
     return astamp, bstamp
 
 
-
-
-
 def contrast_curve_deprecated(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
                    cmap = 'viridis', Ncontours_cmap=100, Ncontours_label = 5, 
                    fontsize=15, plotstyle = 'magrathea'):
@@ -2205,3 +2167,53 @@ def contrast_curve_deprecated(path, Star, sep = np.arange(1,7,1), C = np.arange(
     plt.ylabel('contrast [mags]')
     plt.title(path.split('/')[0]+' '+Star)
     return fig
+
+def radial_subtraction_of_cube_deprecated(cube, exclude_r = 5., exclude_outer = 50., update_prog = True):
+    ''' Subtract radial profile (median value in an annulus extending from the center) from each image
+    in a cube of images.  Uses the radial profile script by Ian Crossfield found here:
+    https://www.astrobetter.com/wiki/python_radial_profiles
+
+    Parameters:
+    ----------
+    cube : 3d array
+        cube of images
+    exclude_r : flt
+        Exclude pixels interior to this radius.  Default = 5
+    exclude_outer : flt
+        Exclude pixels exterior to this radius.  Default = 50
+    update_prog : bool
+        If True, show progress bar of applying subtraction to images in cube.  Default = True
+        
+    Returns:
+    --------
+    3d arr
+        cube of radial profile subtracted images
+
+    Written by Logan Pearce 2020, with functions adapted from Ian Crossfield 2010
+    '''
+    from cliotools.bditools import update_progress
+    from cliotools.miscellany import radial_data
+    Nimages = cube.shape[0]
+    radsub = cube.copy()
+    center = (cube[0].shape[1]/2, cube[0].shape[0]/2)
+    for N in range(Nimages):
+        RadialProfile = radial_data(cube[N]).median
+        inds = np.arange(len(RadialProfile))
+        # for each pixel:
+        for i in range(cube[0].shape[0]):
+            for j in range(cube[0].shape[1]):
+                # compute distance of pixel from center:
+                d = np.hypot(i - center[0], j - center[1])
+                # if the pixel is outside the masked region, and 
+                # within 50 pixels of center (the region we have radial prof for):
+                if d > exclude_r and d < exclude_outer:
+                    # Find the index of radial profile closest to that
+                    # pixel's distance:
+                    ind = (np.abs(d-inds)).argmin()
+                    # get the value of median radial profile at that distance
+                    # and subtract from the pixel's values
+                    if not np.isnan(RadialProfile[ind]):
+                        radsub[N][j,i] = cube[N][j,i] - RadialProfile[ind]
+        if update_prog:
+            update_progress(N+1,Nimages)
+    return radsub

@@ -1,3 +1,5 @@
+import numpy as np
+
 def radial_data(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
     """
     From : https://www.astrobetter.com/wiki/python_radial_profiles
@@ -114,3 +116,65 @@ def radial_data(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
     #---------------------
     
     return radialdata
+
+def radial_data_median_only(data,annulus_width=1,working_mask=None,x=None,y=None,rmax=None):
+    ''' Pared down version of radial_data that computes only the median radial profile
+    '''
+    import numpy as np
+    data = np.array(data)
+    
+    if working_mask==None:
+        working_mask = np.ones(data.shape,bool)
+    
+    npix, npiy = data.shape
+    if x==None or y==None:
+        x1 = np.arange(-npix/2.,npix/2.)
+        y1 = np.arange(-npiy/2.,npiy/2.)
+        x,y = np.meshgrid(y1,x1)
+
+    r = abs(x+1j*y)
+
+    if rmax==None:
+        rmax = r[working_mask].max()
+
+    dr = np.abs([x[0,0] - x[0,1]]) * annulus_width
+    radial = np.arange(rmax/dr)*dr + dr/2.
+    nrad = len(radial)
+    #radialdata = radialDat()
+    radialdata_median = np.zeros(nrad)
+
+    for irad in range(nrad): #= 1:numel(radial)
+        minrad = irad*dr
+        maxrad = minrad + dr
+        thisindex = (r>=minrad) * (r<maxrad) * working_mask
+        if not thisindex.ravel().any():
+            radialdata_median[irad] = np.nan
+        else:
+            radialdata_median[irad] = np.nanmedian(data[thisindex])
+    
+    return radialdata_median
+
+
+def CenteredDistanceMatrix(n, ny = None):
+    ''' Creates 2d array of the distance of each element from the center
+
+    Parameters
+    ----------
+        n : flt
+            x-dimension of 2d array
+        ny : flt (optional)
+            optional y-dimension of 2d array.  If not provided, array is square of dimension nxn
+    
+    Returns
+    -------
+        2d matrix of distance from center
+    '''
+    nx = n
+    if ny:
+        pass
+    else:
+        ny = nx
+    center = ((nx-1)*0.5,(ny-1)*0.5)
+    xx,yy = np.meshgrid(np.arange(nx)-center[0],np.arange(ny)-center[1])
+    r=np.hypot(xx,yy)
+    return r
