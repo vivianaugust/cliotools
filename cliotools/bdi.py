@@ -284,7 +284,7 @@ class ContrastCurve(object):
                  mask_core = True, mask_outer_annulus = True,
                  mask_radius = 5., outer_mask_radius = 50.,
                  subtract_radial_profile = True,
-                 save_results_filename = None
+                 save_results_filename = None, wavelength = 3.9
                 ):
         ''' Class for computing SNR are a variety of separations and contrasts and plotting results
 
@@ -317,6 +317,8 @@ class ContrastCurve(object):
             signal to noise ratios at the computed separation (columns) and contrasts (rows) locations
         runtime : flt
             time to perform computation
+        wavelength : flt
+            central wavelength of filter band in microns.  Default = 3.9
         '''
         
         self.path = path
@@ -335,6 +337,7 @@ class ContrastCurve(object):
         self.mask_outer_annulus = mask_outer_annulus
         self.subtract_radial_profile = subtract_radial_profile
         self.save_results_filename = save_results_filename
+        self.wavelength = wavelength
         if np.size(self.sciencecube) == 1:
             self.box = box
         else:
@@ -365,7 +368,7 @@ class ContrastCurve(object):
                                 mask_core = self.mask_core, 
                                 mask_outer_annulus = self.mask_outer_annulus,
                                 mask_radius = self.inner_mask_radius, outer_mask_radius = self.outer_mask_radius,
-                                subtract_radial_profile = self.subtract_radial_profile)
+                                subtract_radial_profile = self.subtract_radial_profile, wavelength = self.wavelength)
                 else:
                     snr = DoSNR(self.path, self.Star, self.K_klip, self.sep[j], self.C[i], 
                                 sepformat = self.sepformat,
@@ -375,7 +378,7 @@ class ContrastCurve(object):
                                 templatecube = self.templatecube, mask_core = self.mask_core, 
                                 mask_outer_annulus = self.mask_outer_annulus,
                                 mask_radius = self.inner_mask_radius, outer_mask_radius = self.outer_mask_radius,
-                                subtract_radial_profile = self.subtract_radial_profile)
+                                subtract_radial_profile = self.subtract_radial_profile, wavelength = self.wavelength)
                 self.snrs[i,j] = snr
                 update_progress(i+1,len(self.C))
             # write out results every time a separation ring is completed:

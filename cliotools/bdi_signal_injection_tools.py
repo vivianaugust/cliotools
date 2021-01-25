@@ -5,7 +5,7 @@ class SyntheticSignal(object):
     def __init__(self, k, Star, sep, pa, C, sepformat = 'lambda/D', boxsize = 50,
                 sciencecube = [], refcube = [], templatecube = [],
                 template = [], TC = None, use_same = True, verbose = True,
-                inject_negative_signal = False
+                inject_negative_signal = False, wavelength = 3.9
                 ):
         ''' Class for creating and controling images with synthetic point source signals ("planet") injected.
 
@@ -114,7 +114,7 @@ class SyntheticSignal(object):
                 # Inject the desired signal into the science cube:
                 synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, 
                                       center[0], center[1], 
-                                      sepformat = self.sepformat, wavelength = 3.9, box = box, 
+                                      sepformat = self.sepformat, wavelength = wavelength, box = box, 
                                       inject_negative_signal = inject_negative_signal)
                 # place signal-injected image into stack of images:
                 synthcube[i,:,:] = synth
@@ -128,7 +128,7 @@ class SyntheticSignal(object):
             for i in range(self.sciencecube.shape[0]):
                 imhdr = fits.getheader(k['filename'][i])
                 synth = injectplanets(sciencecube[i], imhdr, template, sep, pa, C, TC, box, box, 
-                                              sepformat = sepformat, wavelength = 3.9, box = box)
+                                              sepformat = sepformat, wavelength = wavelength, box = box)
                 synthcube[i,:,:] = synth
                 
         self.synthcube = synthcube.copy()
@@ -139,7 +139,8 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
                 sciencecube = [],
                 refcube = [],
                 templatecube = [], 
-                mask_core = True, mask_outer_annulus = True, mask_radius = 5., outer_mask_radius = 50., subtract_radial_profile = True):
+                mask_core = True, mask_outer_annulus = True, mask_radius = 5., outer_mask_radius = 50., subtract_radial_profile = True,
+                wavelength = 3.9):
     ''' For a single value of separation, position angle, and contrast, inject a fake signal and perform KLIP reduction.
 
     sciencecube, refcube, and templatecube are optional varaibles for supplying a previously constructed
@@ -188,6 +189,8 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
         Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
     subtract_radial_profile : bool
         If True, subtract the median radial profile from each image in the cubes.  Default = True.
+    wavelength : flt
+        central wavelength of filter band in microns.  Default = 3.9
 
     Returns
     -------
@@ -239,7 +242,7 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
         kliped = SynthCubeObjectBDI2.B_Reduced
         
     xc, yc = (0.5*((kliped.shape[1])-1),0.5*((kliped.shape[0])-1))
-    snr = getsnr(kliped, sep, pa, xc, yc)
+    snr = getsnr(kliped, sep, pa, xc, yc, wavelength = wavelength)
     if writeklip:
         from astropy.io import fits
         name = path+'/injectedsignal_star'+Star+'_sep'+'{:.0f}'.format(sep)+'_C'+'{:.1f}'.format(C)+'.fit'
@@ -254,7 +257,7 @@ def DoSNR(path, Star, K_klip, sep, C,
                 refcube = [],
                 templatecube = [], 
                 mask_core = True, mask_outer_annulus = True, mask_radius = 5., outer_mask_radius = 50.,
-                subtract_radial_profile = True
+                subtract_radial_profile = True, wavelength = 3.9
                 ):
     ''' For a single value of separation and contrast, compute the SNR at that separation by computing mean and 
     std deviation of SNRs in apertures in a ring at that sep, a la Mawet 2014 (see Fig 4).
@@ -303,6 +306,8 @@ def DoSNR(path, Star, K_klip, sep, C,
         Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
     subtract_radial_profile : bool
         If True, subtract the median radial profile from each image in the cubes.  Default = True.
+    wavelength : flt
+        central wavelength of filter band in microns.  Default = 3.9
 
     Returns
     -------
@@ -338,7 +343,7 @@ def DoSNR(path, Star, K_klip, sep, C,
                 templatecube = templatecube, 
                 mask_core = mask_core, mask_outer_annulus = mask_outer_annulus, 
                 mask_radius = mask_radius, outer_mask_radius = outer_mask_radius,
-                subtract_radial_profile = subtract_radial_profile
+                subtract_radial_profile = subtract_radial_profile, wavelength = wavelength
                 )
         snrs[i] = snr
         if update_prog:

@@ -424,9 +424,9 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
                 xb,yb = daostarfinder(b, boxsize, boxsize, boxsize = boxsize, fwhm = fwhm)
                 # If StarFinder failed to find a star, just skip it:
                 if np.isnan(xa):
-                    pass
+                    print(k['filename'][i],'Failed')
                 elif np.isnan(xb):
-                    pass
+                    print(k['filename'][i],'Failed')
                 else:
                     # Compute offset of star center from center of image:
                     dx,dy = xa-center[0],ya-center[0]

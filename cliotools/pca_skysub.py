@@ -842,37 +842,3 @@ def findbadpix(std, chunk, n=5):
     badpixmap[badpix] = 1
     return badpix, badpixmap
 
-def badpixfix(imagesr, badpixr, dx = 15):
-    ''' Replace bad pixels with median of dx nearest neighbors
-        along x direction
-
-        Parameters:
-        -----------
-        imagesr : 3d array
-            stack of images to fix
-        badpixr : 2d array
-            list of bad pixels, output of findbadpix
-        dx : int
-            how many pixels to look to right and left to
-            get median replacement value.  Should be odd.
-
-        Returns:
-        --------
-        imfix : 3d array
-            stack of bad pixel corrected images.
-    '''
-    import numpy as np
-    from cliotools.pcaskysub import update_progress
-    # Interpolate bad pixels:
-    imfix = imagesr.copy()
-    for i in range(imagesr.shape[0]):
-        for j in range(len(badpixr[1])):
-            dx = dx # <- must be odd
-            x, y = badpixr[1][j], badpixr[0][j]
-            xarray = np.arange(x-dx,x+dx+1,2)
-            xarray = xarray[np.where(xarray > 0)[0]]
-            xarray = xarray[np.where(xarray < 1024)[0]]
-            imfix[i,y,x] = np.nanmedian(imagesr[i,y,xarray])
-        update_progress(i+1,imagesr.shape[0])
-    return imfix
-
