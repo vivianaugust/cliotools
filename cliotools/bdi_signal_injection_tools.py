@@ -217,7 +217,7 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
         bcube = SynthCubeObject2.synthcube
 
     # create BDI object with injected signal:
-    SynthCubeObjectBDI2 = BDI(k, K_klip = K_klip,          
+    SynthCubeObjectBDI2 = BDI(k, path, K_klip = K_klip,          
                     normalize = True,              
                     inner_mask_core = mask_core,        
                     inner_radius_format = 'pixels',

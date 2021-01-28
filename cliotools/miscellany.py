@@ -178,3 +178,62 @@ def CenteredDistanceMatrix(n, ny = None):
     xx,yy = np.meshgrid(np.arange(nx)-center[0],np.arange(ny)-center[1])
     r=np.hypot(xx,yy)
     return r
+
+from matplotlib import pyplot as plt
+
+class PixelCollect:
+    def __init__(self, pixels):
+        self.pixels = pixels
+        self.xs = list(pixels.get_xdata())
+        self.ys = list(pixels.get_ydata())
+        self.cid = pixels.figure.canvas.mpl_connect('button_press_event', self)
+
+    def __call__(self, event):
+        print('click', event)
+        if event.inaxes!=self.pixels.axes: return
+        self.xs.append(np.int(np.round(event.xdata)))
+        self.ys.append(np.int(np.round(event.ydata)))
+        
+def GetBadPix(image, i):
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.set_title('Image '+str(i)+': Hover over each bad pixel and click to record location')
+    im_fig = ax.imshow(image, origin='lower', cmap='gray',
+                   norm = ImageNormalize(im, interval=MinMaxInterval(),
+                          stretch=SqrtStretch(),))
+    pixels, = ax.plot([], [])
+    pixelcollection = PixelCollect(pixels)
+
+    plt.show()
+    
+    return pixelcollection.xs,pixelcollection.ys
+
+def mkheader(dataset, star, shape, normalized, inner_masked, outer_masked):
+    """ Make a header for writing psf sub BDI KLIP cubes to fits files
+        in the subtract_cubes function
+    """
+    import time
+    from astropy.io import fits
+    header = fits.Header()
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = '         **  Cube of Star '+star+' PSFs          **'
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = 'Postagestamp cube of PSF images that have been aligned and bad pixel detailed'
+    header['COMMENT'] = 'and are ready to go into PrepareCubes'
+    try:
+        header['NAXIS1'] = str(shape[1])
+        header['NAXIS2'] = str(shape[2])
+        header['NAXIS3'] = str(shape[0])
+    except:
+        header['NAXIS1'] = str(shape[0])
+        header['NAXIS2'] = str(shape[1])
+    header['DATE'] = time.strftime("%m/%d/%Y")
+    header['DATASET'] = dataset
+    header['STAR'] = str(star)
+    header['NORMALIZED'] = normalized
+    header['INNER MASKED'] = inner_masked
+    header['OUTER_MASKED'] = outer_masked
+    header['COMMENT'] = 'by Logan A Pearce'
+    return header
+    
+

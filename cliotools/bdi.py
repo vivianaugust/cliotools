@@ -9,7 +9,7 @@ import astropy.units as u
 
 
 class BDI(object):
-    def __init__(self, k, K_klip = 10,
+    def __init__(self, k, path, K_klip = 10,
                                 boxsize = 50,                  
                                 path_prefix = '',
                                 normalize = True,
@@ -34,6 +34,8 @@ class BDI(object):
 
         Attributes:
         -----------
+        path : str
+            path to dataset
         k : Pandas array
             Pandas array made from the output of bditools.findstars_in_dataset.  
             Assumes column names are ['filename', 'xca','yca', 'xcb', 'ycb'].  If
@@ -72,6 +74,7 @@ class BDI(object):
         B_Reduced : 2d arr
             After running Reduce function, the KLIP reduced images for Star B are stored as this attribute.
         '''
+        self.path = path
         self.k = k
         self.boxsize = boxsize
         self.K_klip = K_klip
@@ -260,17 +263,27 @@ class BDI(object):
             Path to desired location for outfiles if other than current directory.  Default = None
 
         '''
+        if len(self.K_klip) == 1:
+            klipstring = self.K_klip
+        else:
+            kk = [str(KK) for KK in self.K_klip]
+            klipstring = '-'.join(kk)
+
         if self.verbose:
             print('Writing finished cubes to file... done!')
         newhdr = psfsub_cube_header(self.k['filename'][0].split('/')[0], self.K_klip, 'A', self.A_Reduced.shape, self.acube.shape[1])
         if headercomment:
             newhdr['COMMENT'] = headercomment
-        fits.writeto(write_directory+self.k['filename'][0].split('_')[0]+'_klipcube_a'+outfilesuffix+'.fit',self.A_Reduced,newhdr,overwrite=True)
+        fits.writeto(self.path+'/'+'A_klipcube_'+self.k['filename'][0].split('/')[0]+'_'+'box'+str(self.boxsize)+\
+            '_Kklip'+klipstring+'_im'+str(int(self.inner_mask_radius))+'_om'+str(int(self.outer_mask_radius))+outfilesuffix+\
+                '.fit',self.A_Reduced,newhdr,overwrite=True)
 
         newhdr = psfsub_cube_header(self.k['filename'][0].split('/')[0], self.K_klip, 'B', self.B_Reduced.shape, self.bcube.shape[1])
         if headercomment:
             newhdr['COMMENT'] = headercomment
-        fits.writeto(write_directory+self.k['filename'][0].split('_')[0]+'_klipcube_b'+outfilesuffix+'.fit',self.B_Reduced,newhdr,overwrite=True)
+        fits.writeto(self.path+'/'+'B_klipcube_'+self.k['filename'][0].split('/')[0]+'_'+'box'+str(self.boxsize)+\
+            '_Kklip'+klipstring+'_im'+str(int(self.inner_mask_radius))+'_om'+str(int(self.outer_mask_radius))+outfilesuffix+\
+                '.fit',self.B_Reduced,newhdr,overwrite=True)
 
 
 
