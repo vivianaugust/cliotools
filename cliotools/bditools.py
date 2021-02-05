@@ -425,8 +425,10 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
                 # If StarFinder failed to find a star, just skip it:
                 if np.isnan(xa):
                     print(k['filename'][i],'Failed')
+                    pass
                 elif np.isnan(xb):
                     print(k['filename'][i],'Failed')
+                    pass
                 else:
                     # Compute offset of star center from center of image:
                     dx,dy = xa-center[0],ya-center[0]
@@ -454,7 +456,7 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
 
     # For image cubes:         
     if len(image.shape) == 3:
-        coadd_count = image.shape[0]
+        coadd_count = 0
         count = 0
         for i in range(len(k)):
             try:
@@ -465,19 +467,22 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
                                                                    np.int_(k['xcb'][i]-boxsize):np.int_(k['xcb'][i]+boxsize)]
                 bstamp[coadd_count:coadd_count+b.shape[0],:,:] = b
                    
-                for j in range(coadd_count,coadd_count+a.shape[0]):
+                for j in range(0,a.shape[0]):
+                    count = count+1
                     xa,ya = daostarfinder(a[j], boxsize, boxsize, boxsize = boxsize, fwhm = fwhm)
                     xb,yb = daostarfinder(b[j], boxsize, boxsize, boxsize = boxsize, fwhm = fwhm)
                     if np.isnan(xa):
+                        print(k['filename'][i],'Failed')
                         pass
                     elif np.isnan(xb):
+                        print(k['filename'][i],'Failed')
                         pass
                     else:
                         dx,dy = xa-center[0],ya-center[0]
-                        astamp[j,:,:] = ndimage.shift(astamp[j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
+                        astamp[coadd_count+j,:,:] = ndimage.shift(astamp[coadd_count+j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
                                                                   prefilter=True)
                         dx,dy = xb-center[0],yb-center[0]
-                        bstamp[j,:,:] = ndimage.shift(bstamp[j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
+                        bstamp[coadd_count+j,:,:] = ndimage.shift(bstamp[coadd_count+j,:,:], [-dy,-dx], output=None, order=3, mode='constant', cval=0.0, \
                                                                   prefilter=True)
                 coadd_count += a.shape[0]
             except:

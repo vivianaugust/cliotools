@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.io import fits
 import os
+from cliotools.global_badpixfix import *
 
 
 ##################### Bad pixel find and fix functions ###################
@@ -12,6 +13,33 @@ import os
 # a list of the good images in the dataset, the ones with useable star   #
 # images, and won't waste time on images that won't be used in the       #
 # analysis later 
+
+def update_progress(n,max_value):
+    import sys
+    import time
+    import numpy as np
+    barLength = 20 # Modify this to change the length of the progress bar
+    status = ""
+    progress = np.round(np.float(n/max_value),decimals=2)
+    if isinstance(progress, int):
+        progress = float(progress)
+    if not isinstance(progress, float):
+        progress = 0
+        status = "error: progress var must be float\r\n"
+    if progress < 0:
+        progress = 0
+        status = "Halt...\r\n"
+    if progress >= 1.:
+        progress = 1
+        status = "Done...\r\n"
+    block = int(round(barLength*progress))
+    text = "\r{0}% ({1} of {2}): |{3}|  {4}".format(np.round(progress*100,decimals=1), 
+                                                  n, 
+                                                  max_value, 
+                                                  "#"*block + "-"*(barLength-block), 
+                                                  status)
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 def raw_beam_count(k):
     '''Count the number of images in a dataset in each dither'''
@@ -48,9 +76,7 @@ def build_raw_stack(k):
                 nod 0 and nod 1
 
     '''
-    from cliotools.pcaskysub import raw_beam_count
     count0,count1 = raw_beam_count(k)
-    
     # Distinguish between fits files that are single images vs data cubes:
     shape = fits.getdata(k['filename'][0]).shape
     xca0, yca0, xcb0, ycb0 = [], [], [], []
@@ -150,6 +176,19 @@ def build_skyframe_stack(path, skip_list=False, K_klip = 10):
     os.system('rm list')
     return sky_stack 
 
+def skysubbed_beam_count(k):
+    '''Count the number of images in a dataset in each dither'''
+    from astropy.io import fits
+    count0, count1 = 0,0
+    for i in range(len(k)):
+        filename = k['filename'][i]
+        imhdr = fits.getheader(filename)
+        if imhdr['BEAM'] == 0:
+            count0 += 1
+        if imhdr['BEAM'] == 1:
+            count1 += 1
+    return count0,count1
+
 def build_skysubbed_stack(k):
     '''Stack skysubbed images into Nx512x1024 array for Nod 0 and Nod 1.
        Written by Logan A. Pearce, 2020
@@ -165,8 +204,7 @@ def build_skysubbed_stack(k):
             stack0, stack1 : Nx512x1024 array
                 stack of skysubbed images in nod 0 and nod 1.
     '''
-    from cliotools.pcaskysub import raw_beam_count
-    count0,count1 = raw_beam_count(k)
+    count0,count1 = skysubbed_beam_count(k)
     
     # Distinguish between fits files that are single images vs data cubes:
     shape = fits.getdata(k['filename'][0]).shape
@@ -275,7 +313,6 @@ def highpassfilter(stack, size = 11):
                 stack of images with hpf applied
     """
     from scipy import ndimage
-    from cliotools.pcaskysub import update_progress
     # copy image stack:
     imfilt = stack.copy()
     # for each image:
@@ -324,7 +361,7 @@ def findbadpix(std, chunk, n=5):
     badpixmap[badpix] = 1
     return badpix, badpixmap
 
-def badpixfix(imagesr, badpixr, dx = 15):
+def badpixfix(imagesr, badpixr, dx = 15, updateprog = True):
     ''' Replace bad pixels with median of dx nearest neighbors
         along x direction
 
@@ -344,7 +381,6 @@ def badpixfix(imagesr, badpixr, dx = 15):
             stack of bad pixel corrected images.
     '''
     import numpy as np
-    from cliotools.pcaskysub import update_progress
     # Interpolate bad pixels:
     imfix = imagesr.copy()
     for i in range(imagesr.shape[0]):
@@ -355,6 +391,39 @@ def badpixfix(imagesr, badpixr, dx = 15):
             xarray = xarray[np.where(xarray > 0)[0]]
             xarray = xarray[np.where(xarray < 1024)[0]]
             imfix[i,y,x] = np.nanmedian(imagesr[i,y,xarray])
-        update_progress(i+1,imagesr.shape[0])
+        if updateprog:
+            update_progress(i+1,imagesr.shape[0])
     return imfix
+
+def badpixfix_singleimage(imagesr, badpixr, dx = 15):
+    ''' Replace bad pixels with median of dx nearest neighbors
+        along x direction
+
+        Parameters:
+        -----------
+        imagesr : 3d array
+            stack of images to fix
+        badpixr : 2d array
+            list of bad pixels, output of findbadpix
+        dx : int
+            how many pixels to look to right and left to
+            get median replacement value.  Should be odd.
+
+        Returns:
+        --------
+        imfix : 3d array
+            stack of bad pixel corrected images.
+    '''
+    import numpy as np
+    # Interpolate bad pixels:
+    imfix = imagesr.copy()
+    for j in range(len(badpixr[1])):
+        dx = dx # <- must be odd
+        x, y = badpixr[1][j], badpixr[0][j]
+        xarray = np.arange(x-dx,x+dx+1,2)
+        xarray = xarray[np.where(xarray > 0)[0]]
+        xarray = xarray[np.where(xarray < 1024)[0]]
+        imfix[y,x] = np.nanmedian(imagesr[y,xarray])
+    return imfix
+
 

@@ -263,8 +263,8 @@ class BDI(object):
             Path to desired location for outfiles if other than current directory.  Default = None
 
         '''
-        if len(self.K_klip) == 1:
-            klipstring = self.K_klip
+        if np.size(self.K_klip) == 1:
+            klipstring = str(self.K_klip)
         else:
             kk = [str(KK) for KK in self.K_klip]
             klipstring = '-'.join(kk)
