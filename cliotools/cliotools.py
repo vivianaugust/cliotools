@@ -37,7 +37,7 @@ def update_progress(n,max_value):
     sys.stdout.write(text)
     sys.stdout.flush()
 
-def lambdaoverD(lamb, D = 6.5):
+def lambdaoverD_to_arcsec(lamb, D = 6.5):
     """ Compute lamb/D.  Default is for Magellan mirror and CLIO narrow camera pixelscale.
         Inputs:
             lamb [um]: central wavelength of filter in microns.  Astropy unit object preferred
@@ -46,17 +46,25 @@ def lambdaoverD(lamb, D = 6.5):
         Returns:
             loverd [arcsec]: lambda/D in arcsec per L/D
     """
-    import astropy.units as u
-    loverd = (0.2063*(lamb/D))
-    return loverd
+    arcsec = (0.2063*(lamb/D))
+    return arcsec
 
 def lambdaoverD_pix(lamb, pixscale = 15.9):
-    from cliotools.cliotools import lambdaoverD
+    from cliotools.cliotools import lambdaoverD_to_arcsec
     import astropy.units as u
-    loverd = lambdaoverD(lamb)
+    loverd = lambdaoverD_to_arcsec(lamb)
     loverd_pix = loverd*u.arcsec.to(u.mas) / pixscale
     return loverd_pix
-    
+
+def lod_to_arcsec(lod):
+    """ Lambda/D into arcsec for Magellan and 3.9 um filter
+    """
+    return lod * 0.12378
+
+def arcsec_to_lod(arcsec):
+    """ arcsec into Lambda/D for Magellan and 3.9 um filter
+    """
+    return arcsec / 0.12378
 
 def pixels_to_lod(pixels, lamb, pixscale = 15.9):
     """ Convert a distance in pixels to lambda over D
@@ -81,10 +89,10 @@ def lod_to_physical(lod, distance, lamb):
         Returns:
         
     '''
-    from cliotools.cliotools import lambdaoverD
+    from cliotools.cliotools import lambdaoverD_to_arcsec
     import astropy.units as u
     # 1 lambda/D in arcsec per l/D:
-    loverd = lambdaoverD(lamb)
+    loverd = lambdaoverD_to_arcsec(lamb)
     # convert to arcsec:
     arcsec = lod*loverd
     return (arcsec * distance)*u.AU
@@ -93,9 +101,9 @@ def lod_to_physical(lod, distance, lamb):
 def physical_to_lod(au, distance, lamb):
     ''' Convert a physucal distance in AU to lambda over D
     '''
-    from cliotools.cliotools import lambdaoverD
+    from cliotools.cliotools import lambdaoverD_to_arcsec
     arcsec = au/distance
-    loverd = lambdaoverD(lamb)
+    loverd = lambdaoverD_to_arcsec(lamb)
     return arcsec/loverd
 
 def pixel_seppa(x1,y1,x2,y2,imhdr=None):

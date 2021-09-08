@@ -280,7 +280,7 @@ def mask(image, xc, yc, radius = 20):
            xc, yc : flt
                x/y pixel location of the center of the star
            radius : int
-               radius of circular mask to apply to star
+               radius of circular mask to apply to star in pixels
         Returns:
         --------
             image_masked : 2d array

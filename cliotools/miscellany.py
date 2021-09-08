@@ -237,3 +237,69 @@ def mkheader(dataset, star, shape, normalized, inner_masked, outer_masked):
     return header
     
 
+def distance(parallax,parallax_error):
+    '''Computes distance from Gaia parallaxes using the Bayesian method of Bailer-Jones 2015.
+    Input: parallax [mas], parallax error [mas]
+    Output: distance [pc], 1-sigma uncertainty in distance [pc]
+    '''
+    import numpy as np
+    # Compute most probable distance:
+    L=1350 #parsecs
+    # Convert to arcsec:
+    parallax, parallax_error = parallax/1000., parallax_error/1000.
+    # establish the coefficients of the mode-finding polynomial:
+    coeff = np.array([(1./L),(-2),((parallax)/((parallax_error)**2)),-(1./((parallax_error)**2))])
+    # use numpy to find the roots:
+    g = np.roots(coeff)
+    # Find the number of real roots:
+    reals = np.isreal(g)
+    realsum = np.sum(reals)
+    # If there is one real root, that root is the  mode:
+    if realsum == 1:
+        gd = np.real(g[np.where(reals)[0]])
+    # If all roots are real:
+    elif realsum == 3:
+        if parallax >= 0:
+            # Take the smallest root:
+            gd = np.min(g)
+        elif parallax < 0:
+            # Take the positive root (there should be only one):
+            gd = g[np.where(g>0)[0]]
+    
+    # Compute error on distance from FWHM of probability distribution:
+    from scipy.optimize import brentq
+    rmax = 1e6
+    rmode = gd[0]
+    M = (rmode**2*np.exp(-rmode/L)/parallax_error)*np.exp((-1./(2*(parallax_error)**2))*(parallax-(1./rmode))**2)
+    lo = brentq(lambda x: 2*np.log(x)-(x/L)-(((parallax-(1./x))**2)/(2*parallax_error**2)) \
+               +np.log(2)-np.log(M)-np.log(parallax_error), 0.001, rmode)
+    hi = brentq(lambda x: 2*np.log(x)-(x/L)-(((parallax-(1./x))**2)/(2*parallax_error**2)) \
+               +np.log(2)-np.log(M)-np.log(parallax_error), rmode, rmax)
+    fwhm = hi-lo
+    # Compute 1-sigma from FWHM:
+    sigma = fwhm/2.355
+            
+    return gd[0],sigma
+
+
+def get_distance(source_ids, catalog = 'gaiaedr3.gaia_source'):
+    '''Use Gaia DR2 source id to return the distance and error in parsecs'''
+    import warnings
+    warnings.filterwarnings("ignore")
+    import numpy as np
+    from astroquery.gaia import Gaia
+    try:
+        d,e = np.array([]),np.array([])
+        for source_id in source_ids:
+            job = Gaia.launch_job("SELECT * FROM "+catalog+" WHERE source_id = "+str(source_id))
+            j = job.get_results()
+            di,ei = distance(np.array(j['parallax']),np.array(j['parallax_error']))
+            d = np.append(d,di)
+            e = np.append(e,ei)
+            print('For',source_id,'d=',[di,ei])
+    except:
+        job = Gaia.launch_job("SELECT * FROM "+catalog+" WHERE source_id = "+str(source_ids))
+        j = job.get_results()
+        d,e = distance(np.array(j['parallax']),np.array(j['parallax_error']))
+    return d,e
+

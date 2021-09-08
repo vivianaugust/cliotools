@@ -1,139 +1,7 @@
 from cliotools.bditools import *
 from cliotools.bdi import *
 
-class SyntheticSignal(object):
-    def __init__(self, k, Star, sep, pa, C, sepformat = 'lambda/D', boxsize = 50,
-                sciencecube = [], refcube = [], templatecube = [],
-                template = [], TC = None, use_same = True, verbose = True,
-                inject_negative_signal = False, wavelength = 3.9
-                ):
-        ''' Class for creating and controling images with synthetic point source signals ("planet") injected.
-
-        Written by Logan A. Pearce, 2020
-        Dependencies: numpy, scipy, pandas
-
-        Attributes:
-        -----------
-        k : str
-            pandas datafrom made from importing "CleanList"
-        Star : 'A' or 'B'
-            star to put the fake signal around
-        sep : flt
-            separation of planet placement in either arcsec, mas, pixels, or lambda/D [prefered]
-        pa : flt
-            position angle for planet placement in degrees from North
-        C : flt
-            desired contrast of planet with central object
-        sepformat : str
-            format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
-            Default = 'lambda/D'
-        boxsize : int
-            size of box of size "2box x 2box" for image stamps, if cubes aren't supplied by user
-        sciencecube : 3d arr
-            optional user input the base images to use in injection for science images.  If not provided \
-            script will generate them from files in CleanList and specified science star
-        refcube : 3d arr
-            optional user input the base images to use in injection for reference images in KLIP reduction.  If not provided \
-            script will generate them from files in CleanList and specified science star
-        templatecube : 3d arr
-            user input the base images to use as psf template in creating the fake signal. If not provided \
-            script will generate them from files in CleanList and specified science star.
-        template : 2d arr
-            optional user input for a psf template not built from the BDI dataset.
-        TC : flt
-            if external template provided, you must specify the contrast of the template relative to the science star
-        use_same : bool
-            If True, use the same star as a template for a synthetic psf signal around itself.  If false, use the opposite star. \
-            Default = True
-        verbose : bool
-            If True, print status of things.  Default = True
-        inject_negative_signal : bool
-            If True, inject a negative planet signal instead of positive.  Default = False.
-
-        '''
-        self.k = k
-        self.Star = Star
-        self.sep = sep
-        self.pa = pa
-        self.C = C
-        self.sepformat = sepformat
-        self.verbose = verbose
-        # If no image cubes provided:
-        if np.size(sciencecube) == 1:
-            # Make image cubes without normalizing or masking:
-            self.astamp, self.bstamp = PrepareCubes(self.k, 
-                                                    boxsize = boxsize, 
-                                                    normalize = False,
-                                                    inner_mask_core = False,         
-                                                    outer_mask_annulus = False,
-                                                    verbose = self.verbose
-                                                    )
-            # If using the same star as the psf template:
-            if use_same:
-                if Star == 'A':
-                    self.sciencecube = self.astamp.copy()
-                    self.templatecube = self.astamp.copy()
-                elif Star == 'B':
-                    self.sciencecube = self.bstamp.copy()
-                    self.templatecube = self.bstamp.copy()
-            # else use the other star as psf template:
-            else:
-                if Star == 'A':
-                    self.sciencecube = self.astamp.copy()
-                    self.templatecube = self.bstamp.copy()
-                elif Star == 'B':
-                    self.sciencecube = self.bstamp.copy()
-                    self.templatecube = self.astamp.copy()
-            # Assign the opposite star as the reference set for KLIP reduction:
-            if Star == 'A':
-                self.refcube = self.bstamp.copy()
-            elif Star == 'B':
-                self.refcube = self.astamp.copy()
-            box = boxsize
-        # Else assign user supplied cubes:
-        else:
-            self.sciencecube = sciencecube
-            self.refcube = refcube
-            self.templatecube = templatecube
-            box = templatecube.shape[1] / 2
-        
-        # Inject planet signal into science target star:
-        from cliotools.bditools import injectplanets
-        synthcube = np.zeros(np.shape(self.sciencecube))
-        if not len(template):
-            # If template PSF is not provided by user (this is most common):
-            from cliotools.bditools import contrast
-            # for each image in science cube:
-            for i in range(self.sciencecube.shape[0]):
-                # Get template constrast of refcube to sciencecube
-                center = (0.5*((self.sciencecube.shape[2])-1),0.5*((self.sciencecube.shape[1])-1))
-                TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
-                # image header must be provided to 
-                # accomodate rotation from north up reference got PA to image reference:
-                imhdr = fits.getheader(self.k['filename'][i]) 
-                # Inject the desired signal into the science cube:
-                synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, 
-                                      center[0], center[1], 
-                                      sepformat = self.sepformat, wavelength = wavelength, box = box, 
-                                      inject_negative_signal = inject_negative_signal)
-                # place signal-injected image into stack of images:
-                synthcube[i,:,:] = synth
-                
-        else:
-            # If external template is provided: (this might happen if other star is saturated, etc)
-            if not TC:
-                # Known contrast of template to science star must be provided
-                raise ValueError('template contrast needed')
-            # inject signal:
-            for i in range(self.sciencecube.shape[0]):
-                imhdr = fits.getheader(k['filename'][i])
-                synth = injectplanets(sciencecube[i], imhdr, template, sep, pa, C, TC, box, box, 
-                                              sepformat = sepformat, wavelength = wavelength, box = box)
-                synthcube[i,:,:] = synth
-                
-        self.synthcube = synthcube.copy()
-
-def GetSNR(path, Star, K_klip, sep, pa, C, 
+def GetSNR(path, Star, K_klip, sep, pa, C, boxsize = 50,
                 sepformat = 'lambda/D',
                 returnsnrs = False, writeklip = False, update_prog = False, 
                 sciencecube = [],
@@ -217,7 +85,8 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
         bcube = SynthCubeObject2.synthcube
 
     # create BDI object with injected signal:
-    SynthCubeObjectBDI2 = BDI(k, path, K_klip = K_klip,          
+    SynthCubeObjectBDI2 = BDI(k, path, K_klip = K_klip, 
+                    boxsize = boxsize,         
                     normalize = True,              
                     inner_mask_core = mask_core,        
                     inner_radius_format = 'pixels',
@@ -252,6 +121,7 @@ def GetSNR(path, Star, K_klip, sep, pa, C,
 
 def DoSNR(path, Star, K_klip, sep, C, 
                 sepformat = 'lambda/D',
+                sep_cutout_region = [0,0], pa_cutout_region = [0,0],
                 returnsnrs = False, writeklip = False, update_prog = False, 
                 sciencecube = [],
                 refcube = [],
@@ -282,6 +152,8 @@ def DoSNR(path, Star, K_klip, sep, C,
         contrast of inject signal
     sepformat : str
         format of provided separations, either `lambda/D` or `pixels`.  Default = `lambda/D`
+    sep_cutout_region, pa_cutout_region : tuple, tuple
+        do not include apertures that fall within this sep/pa box in SNR calc.  Sep in lambda/D, pa in degrees
     returnsnrs : bool
         if True, return the SNRs array as well as the mean.  Default = False
     writeklip : bool
@@ -326,16 +198,23 @@ def DoSNR(path, Star, K_klip, sep, C,
     dTheta = 360/Napers
     # Create array around circumference, excluding the ones immediately before and after
     # where the planet is:
-    pas = np.arange(pa,pa+360-dTheta,dTheta)%360
+    pas = np.arange(pa+2*dTheta,pa+360-2*dTheta,dTheta)%360
+    # Exclude cutout region if applicable:
+    if sep >= sep_cutout_region[0] and sep <= sep_cutout_region[1]:
+        cutouts = np.where(pas > pa_cutout_region[1])[0]
+        cutouts = np.append(cutouts,np.where(pas < pa_cutout_region[0])[0])
+        pas = pas[cutouts]
     # create empty container to store results:
     snrs = np.zeros(len(pas))
     # create synth cube with injected signal:
+    boxsize = sciencecube.shape[1] * 0.5
     for i in range(len(pas)):
         if i == 0 and writeklip:
             do_writeklip = True
         else:
             do_writeklip = False
         snr, SynthCubeObject, SynthCubeObjectBDI = GetSNR(path, Star, K_klip, sep, pas[i], C, 
+                boxsize = boxsize,
                 sepformat = sepformat,
                 returnsnrs = returnsnrs, writeklip = do_writeklip, update_prog = False, 
                 sciencecube = sciencecube,
@@ -645,3 +524,439 @@ def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, **kwarg
                                       **kwargs)
     return synth
 
+class SyntheticSignal(object):
+    def __init__(self, k, Star, sep, pa, C, sepformat = 'lambda/D', boxsize = 50,
+                sciencecube = [], refcube = [], templatecube = [],
+                template = [], TC = None, use_same = True, verbose = True,
+                inject_negative_signal = False, wavelength = 3.9
+                ):
+        ''' Class for creating and controling images with synthetic point source signals ("planet") injected.
+
+        Written by Logan A. Pearce, 2020
+        Dependencies: numpy, scipy, pandas
+
+        Attributes:
+        -----------
+        k : str
+            pandas datafrom made from importing "CleanList"
+        Star : 'A' or 'B'
+            star to put the fake signal around
+        sep : flt
+            separation of planet placement in either arcsec, mas, pixels, or lambda/D [prefered]
+        pa : flt
+            position angle for planet placement in degrees from North
+        C : flt
+            desired contrast of planet with central object
+        sepformat : str
+            format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
+            Default = 'lambda/D'
+        boxsize : int
+            size of box of size "2box x 2box" for image stamps, if cubes aren't supplied by user
+        sciencecube : 3d arr
+            optional user input the base images to use in injection for science images.  If not provided \
+            script will generate them from files in CleanList and specified science star
+        refcube : 3d arr
+            optional user input the base images to use in injection for reference images in KLIP reduction.  If not provided \
+            script will generate them from files in CleanList and specified science star
+        templatecube : 3d arr
+            user input the base images to use as psf template in creating the fake signal. If not provided \
+            script will generate them from files in CleanList and specified science star.
+        template : 2d arr
+            optional user input for a psf template not built from the BDI dataset.
+        TC : flt
+            if external template provided, you must specify the contrast of the template relative to the science star
+        use_same : bool
+            If True, use the same star as a template for a synthetic psf signal around itself.  If false, use the opposite star. \
+            Default = True
+        verbose : bool
+            If True, print status of things.  Default = True
+        inject_negative_signal : bool
+            If True, inject a negative planet signal instead of positive.  Default = False.
+
+        '''
+        from cliotools.bdi_signal_injection_tools import contrast
+        self.k = k
+        self.Star = Star
+        self.sep = sep
+        self.pa = pa
+        self.C = C
+        self.sepformat = sepformat
+        self.verbose = verbose
+        # If no image cubes provided:
+        if np.size(sciencecube) == 1:
+            # Make image cubes without normalizing or masking:
+            self.astamp, self.bstamp = PrepareCubes(self.k, 
+                                                    boxsize = boxsize, 
+                                                    normalize = False,
+                                                    inner_mask_core = False,         
+                                                    outer_mask_annulus = False,
+                                                    verbose = self.verbose
+                                                    )
+            # If using the same star as the psf template:
+            if use_same:
+                if Star == 'A':
+                    self.sciencecube = self.astamp.copy()
+                    self.templatecube = self.astamp.copy()
+                elif Star == 'B':
+                    self.sciencecube = self.bstamp.copy()
+                    self.templatecube = self.bstamp.copy()
+            # else use the other star as psf template:
+            else:
+                if Star == 'A':
+                    self.sciencecube = self.astamp.copy()
+                    self.templatecube = self.bstamp.copy()
+                elif Star == 'B':
+                    self.sciencecube = self.bstamp.copy()
+                    self.templatecube = self.astamp.copy()
+            # Assign the opposite star as the reference set for KLIP reduction:
+            if Star == 'A':
+                self.refcube = self.bstamp.copy()
+            elif Star == 'B':
+                self.refcube = self.astamp.copy()
+            box = boxsize
+        # Else assign user supplied cubes:
+        else:
+            self.sciencecube = sciencecube
+            self.refcube = refcube
+            self.templatecube = templatecube
+            box = templatecube.shape[1] / 2
+        
+        # Inject planet signal into science target star:
+        from cliotools.bditools import injectplanets
+        synthcube = np.zeros(np.shape(self.sciencecube))
+        if len(templatecube) == 0:
+            #print('not template provided')
+            # If template PSF is not provided by user (this is most common):
+            from cliotools.bditools import contrast
+            # for each image in science cube:
+            for i in range(self.sciencecube.shape[0]):
+                # Get template constrast of refcube to sciencecube
+                center = (0.5*((self.sciencecube.shape[2])-1),0.5*((self.sciencecube.shape[1])-1))
+                TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
+                # image header must be provided to 
+                # accomodate rotation from north up reference got PA to image reference:
+                imhdr = fits.getheader(self.k['filename'][i]) 
+                # Inject the desired signal into the science cube:
+                synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, 
+                                      center[0], center[1], 
+                                      sepformat = self.sepformat, wavelength = wavelength, box = box, 
+                                      inject_negative_signal = inject_negative_signal)
+                # place signal-injected image into stack of images:
+                synthcube[i,:,:] = synth
+                
+        else:
+            center = (0.5*((self.sciencecube.shape[2])-1),0.5*((self.sciencecube.shape[1])-1))
+            # If external template is provided: (this might happen if other star is saturated, etc)
+            #if TC == None:
+                # Known contrast of template to science star must be provided
+                #raise ValueError('template contrast needed')
+            # inject signal:
+            for i in range(self.sciencecube.shape[0]):
+                if TC == None:
+                    from cliotools.bditools import contrast
+                    # Get template constrast of refcube to sciencecube
+                    TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
+                imhdr = fits.getheader(k['filename'][i])
+                synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, box, box, 
+                                              sepformat = sepformat, wavelength = wavelength, box = box)
+                synthcube[i,:,:] = synth
+                
+        self.synthcube = synthcube.copy()
+
+################## Tools for estimating noise floor contrast ###################################
+
+def makeskycube(path,x,y,k,box,lim_lod = 10, write_skycube = False):
+    from cliotools.bditools import circle_mask
+    from cliotools.cliotools import lod_to_pixels
+    xx,yy = np.meshgrid(np.arange(x-box,x+box+1,1),np.arange(y-box,y+box+1,1))
+    lim = lod_to_pixels(lim_lod, 3.9)
+    im = fits.getdata(k['filename'][0])
+    count = 0
+    keep = np.array([])
+    im = fits.getdata(k['filename'][0])
+    ndim = len(im.shape)
+    if ndim == 2:
+        skycube = np.zeros([len(k),box*2,box*2])
+    if ndim == 3:
+        s = im.shape[0]
+        skycube = np.zeros([(len(k)+1)*s,box*2,box*2])
+    for i in range(len(k)):
+        if ndim == 2:
+            tooclose = False
+            im = fits.getdata(k['filename'][i])
+            sky = im[y-box:y+box,x-box:x+box]
+            xca,yca = k['xca'][i],k['yca'][i]
+            xcb,ycb = k['xcb'][i],k['ycb'][i]
+            ra = circle_mask(lim,im.shape[1],im.shape[0], xca, yca)
+            rb = circle_mask(lim,im.shape[1],im.shape[0], xcb, ycb)
+            skycube[count,:,:] = sky
+            count += 1
+        if ndim == 3:
+            im = fits.getdata(k['filename'][i])
+            for j in range(im.shape[0]):
+                sky = im[j,y-box:y+box,x-box:x+box]
+                xca,yca = k['xca'][i],k['yca'][i]
+                xcb,ycb = k['xcb'][i],k['ycb'][i]
+                ra = circle_mask(lim,im.shape[2],im.shape[1], xca, yca)
+                rb = circle_mask(lim,im.shape[2],im.shape[1], xcb, ycb)
+                skycube[count+j,:,:] = sky
+            count += 1   
+    #print(keep)
+    #skycube = skycube[np.int_(keep)]
+    if write_skycube:
+        fits.writeto(path+'skycube.fits',skycube,overwrite = True)
+    return skycube
+
+def GetSingleSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C ,TC = 0,sep = 4, pa = 270., write_skycube = False,
+                                skycube1 = None, skycube2 = None):
+    from cliotools.bdi import BDI
+    from cliotools.bdi_signal_injection_tools import getsnr,injectplanets
+    # Make two skycubes:
+    if np.size(skycube1) == 1:
+        skycube1 = makeskycube(path, x1,y1,k,box, write_skycube=write_skycube)
+    if np.size(skycube2) == 1:
+        skycube2 = makeskycube(path, x2,y2,k,box, write_skycube=write_skycube)
+    
+    smallest = np.min([skycube1.shape[0],templatecube.shape[0]])
+    # inject fake signal into skycube1:
+    synthcube = skycube1.copy()
+    center = (0.5*((skycube1.shape[2])-1),0.5*((skycube1.shape[1])-1))
+    for i in range(smallest):
+        imhdr = fits.getheader(k['filename'][i])
+        synthcube[i,:,:] = injectplanets(skycube1[i], imhdr, templatecube[i], sep, pa, C, TC, 
+                                          center[0], center[1], box = box, wavelength = 3.9)
+    # Make BDIObject and reduce:
+    k = pd.read_csv(path+'CleanList', 
+                         delim_whitespace = False,  # Spaces separate items in the list
+                         comment = '#',             # Ignore commented rows
+                        )
+    BDIobject = BDI(k, path, K_klip = K_klip,
+                    boxsize = box,
+                    path_prefix = '',
+                    normalize = False,
+                    inner_mask_core = False,
+                    outer_mask_annulus = False,    
+                    subtract_radial_profile = False,
+                    verbose = False,
+                    acube = synthcube,
+                    bcube = skycube2
+                   )               
+    BDIobject.Reduce(interp='bicubic',
+                     rot_cval=0.,
+                     mask_interp_overlapped_pixels = False
+                    ) 
+    # compute SNR:
+    snr = getsnr(BDIobject.A_Reduced, sep, pa, center[0], center[1] , wavelength = 3.9)
+    return snr, BDIobject
+
+def GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C ,TC = 0,sep = 4, write_skycube = False,
+                                        skycube1 = None, skycube2 = None):
+    from cliotools.pcaskysub import update_progress
+    from cliotools.bditools import getsnr
+    # Define starting point pa:
+    pa = 270.
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    pas = np.arange(pa,pa+360-dTheta,dTheta)%360
+    # create empty container to store results:
+    snrs = np.zeros(len(pas))
+    for i in range(len(pas)):
+        snr, BDIobject2 = GetSingleSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, 
+                                            templatecube, C ,TC = 0,sep = 4, pa = pas[i], write_skycube = write_skycube, skycube1 = skycube1, skycube2 = skycube2)
+        snrs[i] = snr
+    return np.mean(snrs)
+
+def GetNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C, TC = 0,sep = 4, write_skycube = False, skycube1 = None, skycube2 = None):
+    from cliotools.pcaskysub import update_progress
+    snrs = np.zeros(len(C))
+    for i in range(len(C)):
+        snr1 = GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C[i], TC = 0,sep = 4, write_skycube = write_skycube,
+                            skycube1 = skycube1, skycube2 = skycube2)
+        snrs[i] = snr1
+        update_progress(i+1,len(C))
+    return snrs
+
+def GetNoiseFloors(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C, TC = 0,sep = 4, write_skycube = False, overwrite = False, 
+                    skycube1 = None, skycube2 = None, filesuffix=''):
+    from scipy import interpolate
+    n = {}
+    for Klip in K_klip:
+        print('Testing KLIP modes:',Klip)
+        snrs = GetNoiseFloor(path, k, x1, y1, x2, y2, np.array([Klip]), box, templatecube, C, TC = 0,sep = 4, write_skycube = write_skycube, 
+                            skycube1 = skycube1, skycube2 = skycube2)
+        pickle.dump(snrs,open(path+'NoiseFloorSNRS_Kklip'+str(Klip)+filesuffix+'.pkl','wb'))
+        newC = np.linspace(np.min(C),np.max(C),100)
+        f = interpolate.interp1d(C, snrs, fill_value='extrapolate')
+        contrast = f(newC)
+        ind = np.where(contrast <= 5.0)
+        try:
+            noise_floor = newC[ind][0]
+        except:
+            print('didnt fall below 5, skipping')
+            continue
+        n.update({Klip:noise_floor})
+        pickle.dump(n,open(path+'NoiseFloors'+filesuffix+'.pkl','wb'))
+
+def get_phoenix_model(model, wavelength_lim = None, DF = -8.0):
+    ''' Open *.7 spectral file from https://phoenix.ens-lyon.fr/Grids/.  Explanataion of file
+    at https://phoenix.ens-lyon.fr/Grids/FORMAT
+    
+    Args:
+        model (str): path to model file
+        wavelength_lim (flt): cut off wavelength in Ang at red end
+        DF (flt): DF value for converting model to Ergs/sec/cm**2/A, from the "format" page.  DF=-8.0 for
+            modern models
+    Returns:
+        pd datafram with columns 'Wavelength','Flux','BBFlux'; flux, BBflux in Ergs/sec/cm**2/A, wavelength in Ang
+        
+    '''
+    t = pd.read_table(model, delim_whitespace=True, usecols=[0,1,2], skiprows=50000,
+                     names=['Wavelength','Flux','BBFlux'])
+    # convert from IDL double float precision to Python-ese:
+    t['BBFlux'] = t['BBFlux'].str.replace('D','e')
+    t['Flux'] = t['Flux'].str.replace('D','e')
+    # Convert string to float and add DF:
+    t['Flux'] = t['Flux'].astype(float) + DF
+    t['BBFlux'] = t['BBFlux'].astype(float) + DF
+    # sort dataframe by wavelength in case it is not sorted:
+    t = t.sort_values(by=['Wavelength'])
+    # convert wavelength to microns:
+    #angstroms_to_um = 1/10000
+    #t['Wavelength'] = t['Wavelength'] * angstroms_to_um
+    # limit the output to desired wavelength range, because the model 
+    # goes out to 100's of microns:
+    if wavelength_lim:
+        lim = np.where(t['Wavelength'] < wavelength_lim)[0][-1]
+        t = t.loc[0:lim]
+    return t
+
+def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux = [], filesuffix = ''):
+    d = distance
+    ############# Filter zero point fluxes: ###################
+    # the wavelengths of the filter bands:
+    wavelengths = np.array([1.24,1.65,2.2,3.35,4.6]) #microns
+    # Filter zero points:
+    # 2MASS:
+    f0J = ( 1594*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.235 * u.um)),
+           27.8*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.235 * u.um)) )
+    f0H = ( 1024*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.662 * u.um)),
+           20.0*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.662 * u.um)) )
+    f0K = ( 666.7*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(2.159 * u.um)),
+           12.6*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(2.159 * u.um)) )
+    # WISE:
+    f0335 = 309.540 #Jy
+    f0335 = f0335*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(3.35 * u.um))
+    f046 = 171.787 # Jy
+    f046 = f046*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(4.6 * u.um))
+    #put in array:
+    f0 = np.array([f0J[0],f0H[0],f0K[0],f0335,f046])
+    
+    ############# Convert app mags to fluxes: ###################
+    # convert m to fluxes in those filters:
+    fluxes = f0*10**(-m/2.5)
+    
+    ############# Interpolate to 3.9 microns flux using models: ###################
+    if np.size(interpflux) == 0:
+        interpflux = np.zeros(len(models))
+        for i in range(len(models)):
+            r = fits.open('../model_spectra/'+models[i])
+            data = r[1].data
+            ind = np.where((data['WAVELENGTH'] < 33500.1) & (data['WAVELENGTH'] > 33400) )[0]
+            try:
+                ind = ind[-1]
+            except:
+                pass
+            scale_factor = fluxes[3]/(data['FLUX'][ind])
+            scaledflux = data['FLUX']*scale_factor
+            ind2 = np.where((data['WAVELENGTH'] < 39000.1) & (data['WAVELENGTH'] > 38950) )[0]
+            try:
+                ind2 = ind2[-1]
+            except:
+                pass
+            interpflux[i] = scaledflux[ind2]
+    
+    ############# Compute primary's true flux: ##################
+    primary_true_flux = np.mean(interpflux) # in physical units ergs s^-1 cm^-2 Ang^-1
+    primary_true_flux_err = np.std(interpflux)
+    
+    ############# Convert to apparent magnitude: #############
+    # open Vega's model:
+    model = 'alpha_lyr_mod_004.fits'
+    r = fits.open('../model_spectra/'+model)
+    data = r[1].data
+    ind = np.where((data['WAVELENGTH'] < 39000.1) & (data['WAVELENGTH'] > 38950) )[0]
+    f_vega = data['FLUX'][ind]
+    primary_app_mag = -2.5*np.log10(primary_true_flux/f_vega)[0]
+    
+    ############# Compute contrast of A relative to B in images: ############
+    fivesigmacontrast = reloadA.fivesigmacontrast
+    sep = reloadA.resep_au
+    from cliotools.bditools import contrast
+    cont = np.zeros(len(k))
+    for i in range(len(k)):
+        image = fits.getdata(k['filename'][i])
+        if len(image.shape) == 2:
+            cont[i] = contrast(image,image,[k['xca'][i],k['yca'][i]],[k['xcb'][i],k['ycb'][i]])
+        elif len(image.shape) == 3:
+            cont[i] = contrast(image[0],image[0],[k['xca'][i],k['yca'][i]],[k['xcb'][i],k['ycb'][i]])
+
+    ABcontrast = np.mean(cont)
+    
+    ############# Apparent mag os object at the 5 sigma contrast limit for star A: ################
+    fivesigmacontrastA = fivesigmacontrast
+    fivesigma_app_mag = primary_app_mag + fivesigmacontrastA
+    
+    ########## Convert to absolute mag: ################
+    fivesigma_abs_Mag = fivesigma_app_mag - 5*np.log10(d[0]) + 5
+    
+    ########## load BT Settl grids #####################
+    # Load BT Settl grids:
+    f = pd.read_table("../isochrones/model.BT-Settl.MKO.txt",header=3,delim_whitespace=True)
+    # we want to find a mass by interpolating from our literature age value and
+    # out just computed L' magnitudes:
+    BTmass = f['M/Ms'].values
+    BTage = f['t(Gyr)'].values
+    BTL = f["L'"].values
+    
+    ########### Interpolate mass for age and L' mag: ###################
+    from scipy.interpolate import griddata
+    import pickle
+
+    BTagearray = np.random.normal(age[0],age[1],100000)
+
+    # For each abs magnitude value:
+    fivesigma_mass_limit = np.zeros(len(fivesigma_abs_Mag))
+    for i in range(len(fivesigma_abs_Mag)):
+        # Generate an array of L' values around the mag value with error
+        # (a placeholder for now, I haven't computed error accurately)
+        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        # interpolate masses from a grid of ages and L' mag:
+        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
+
+    pickle.dump(fivesigma_mass_limit, open(path+'StarA_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+filesuffix+'.pkl','wb'))
+    
+    ############## Repeat for B ##########################
+    fivesigmacontrast = reloadB.fivesigmacontrast
+    fivesigmacontrastB = fivesigmacontrast + ABcontrast
+    # The apparent magnitude of an object at the 5 sigma constrast limit around B:
+    fivesigma_app_mag = primary_app_mag + fivesigmacontrastB
+    # distance modulus:
+    fivesigma_abs_Mag = fivesigma_app_mag - 5*np.log10(d[0]) + 5
+    
+    # Interpolate masses:
+    BTagearray = np.random.normal(age[0],age[1],100000)
+    # For each abs magnitude value:
+    fivesigma_mass_limit = np.zeros(len(fivesigma_abs_Mag))
+    for i in range(len(fivesigma_abs_Mag)):
+        # Generate an array of L' values around the mag value with error
+        # (a placeholder for now, I haven't computed error accurately)
+        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        # interpolate masses from a grid of ages and L' mag:
+        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
+    pickle.dump(fivesigma_mass_limit, open(path+'StarB_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+filesuffix+'.pkl','wb'))

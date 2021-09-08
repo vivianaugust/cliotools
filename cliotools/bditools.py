@@ -132,7 +132,8 @@ def daostarfinder(scienceimage, x, y, boxsize = 100, threshold = 1e4, fwhm = 10,
     return x_subpix, y_subpix
 
 def findstars(imstamp, scienceimage_filename, nstars, \
-              boxsize = 100, threshold = 1e4, fwhm = 10, radius = 20):
+              boxsize = 100, threshold = 1e4, fwhm = 10, radius = 20,
+              a_guess = [], b_guess = []):
     """Find the subpixel location of all stars in a single clio BDI image using DAOStarFinder 
        (https://photutils.readthedocs.io/en/stable/api/photutils.detection.DAOStarFinder.html).
        Written by Logan A. Pearce, 2020
@@ -154,6 +155,8 @@ def findstars(imstamp, scienceimage_filename, nstars, \
            fwhm keyword for DAO StarFinder
        radius : int
            radius to use when masking stars in image
+        a_guess, b_guess : tuple
+            (x,y) pixel tuple of rought guess of location of star A and B in image
            
        Returns:
        --------
@@ -161,7 +164,6 @@ def findstars(imstamp, scienceimage_filename, nstars, \
            1 x nstars array of subpixel x location and y location of stars
     """
     from scipy import signal
-    from photutils import DAOStarFinder
     
     # Open science target image:
     image = fits.getdata(scienceimage_filename)
@@ -170,37 +172,49 @@ def findstars(imstamp, scienceimage_filename, nstars, \
         image = image[0]
     # Median filter to smooth image:
     image = ndimage.median_filter(image, 3)
-    # Use cross-correlation to find int(y,x) of star A (brightest star) in image:
-    corr = signal.correlate2d(image, imstamp, boundary='symm', mode='same')
-    # Find the location of the brightest star in the image:
-    y, x = np.unravel_index(np.argmax(corr), corr.shape)
     # Make container to hold results:
     x_subpix, y_subpix = np.array([]), np.array([])
-    # Make a copy of the correlation image to mask:
-    corr_masked = corr.copy()
-    image_masked = image.copy()
-    # For each star in the image:
-    for i in range(nstars):
-        # Use DAO Star Finder to find the subpixel location of the star at that location:
-        xs, ys = daostarfinder(image_masked, x, y, boxsize = boxsize, threshold = threshold, fwhm = fwhm)
+
+    if len(a_guess) != 0:
+        # Run starfinder at location of guess:
+        x,y = a_guess[0],a_guess[1]
+        xs, ys = daostarfinder(image, x, y, boxsize = boxsize, threshold = threshold, fwhm = fwhm)
         x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
-        # Make a mask around that star on the cross-correlation image:
-        # Make a meshgrid of the image centered at the last found star:
-        xx,yy = np.meshgrid(np.arange(image.shape[1])-x_subpix[i],np.arange(image.shape[0])-y_subpix[i])
-        # Make an array of the distances of each pixel from that center:
-        rA=np.hypot(xx,yy)
-        # Mask wherever that distance is less than the set radius and
-        # set those pixels to zero:
-        corr_masked[np.where((rA < radius))] = 0
-        image_masked[np.where((rA < radius))] = 0
-        # Now find the new highest correlation which should be the next star:
-        y, x = np.unravel_index(np.argmax(corr_masked), corr.shape)
-        # Repeat until all stars are found.
+        # repeat for B:
+        x,y = b_guess[0],b_guess[1]
+        xs, ys = daostarfinder(image, x, y, boxsize = boxsize, threshold = threshold, fwhm = fwhm)
+        x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+    
+    else:
+        # Use cross-correlation to find int(y,x) of star A (brightest star) in image:
+        corr = signal.correlate2d(image, imstamp, boundary='symm', mode='same')
+        # Find the location of the brightest star in the image:
+        y, x = np.unravel_index(np.argmax(corr), corr.shape)
+        # Make a copy of the correlation image to mask:
+        corr_masked = corr.copy()
+        image_masked = image.copy()
+        # For each star in the image:
+        for i in range(nstars):
+            # Use DAO Star Finder to find the subpixel location of the star at that location:
+            xs, ys = daostarfinder(image_masked, x, y, boxsize = boxsize, threshold = threshold, fwhm = fwhm)
+            x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+            # Make a mask around that star on the cross-correlation image:
+            # Make a meshgrid of the image centered at the last found star:
+            xx,yy = np.meshgrid(np.arange(image.shape[1])-x_subpix[i],np.arange(image.shape[0])-y_subpix[i])
+            # Make an array of the distances of each pixel from that center:
+            rA=np.hypot(xx,yy)
+            # Mask wherever that distance is less than the set radius and
+            # set those pixels to zero:
+            corr_masked[np.where((rA < radius))] = 0
+            image_masked[np.where((rA < radius))] = 0
+            # Now find the new highest correlation which should be the next star:
+            y, x = np.unravel_index(np.argmax(corr_masked), corr.shape)
+            # Repeat until all stars are found.
 
     return x_subpix, y_subpix
 
 def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corrboxsizey = 40, boxsize = 100, skip_list = False, \
-                         append_file = False, threshold = 1e4, radius = 20, fwhm = 10):
+                         append_file = False, threshold = 1e4, radius = 20, fwhm = 10, filesuffix = '_skysub'):
     """Find the subpixel location of stars A and B in a clio BDI dataset.
        Written by Logan A. Pearce, 2020
        Dependencies: numpy, astropy, scipy, photutils
@@ -251,7 +265,7 @@ def findstars_in_dataset(dataset_path, nstars, xca, yca, corrboxsizex = 40, corr
     
     # Make a list of all images in dataset:
     if skip_list == False:
-        os.system('ls '+dataset_path+'0*_skysub.fit > list')
+        os.system('ls '+dataset_path+'0*'+filesuffix+'.fit > list')
     with open('list') as f:
         ims = f.read().splitlines()
     # Open initial image in dataset:
@@ -358,7 +372,7 @@ def rotate_clio(image, imhdr, center = None, interp = 'bicubic', bordermode = 'c
     return imrot
     
 
-def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
+def ab_stack_shift(k, boxsize = 50, fwhm = 7.8, path_prefix='', verbose = True):
     """Prepare cubes for BDI by stacking and subpixel aligning image 
        postage stamps of star A and star B.
        Written by Logan A. Pearce, 2020
@@ -387,8 +401,6 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
     warnings.filterwarnings('ignore')
     # define center:
     center = (0.5*((2*boxsize)-1),0.5*((2*boxsize)-1))
-    # define fwhm for starfinder
-    fwhm = 7.8
     # open first image to get some info:
     i = 0
     image = fits.getdata(path_prefix+k['filename'][i])
@@ -487,11 +499,8 @@ def ab_stack_shift(k, boxsize = 50, path_prefix='', verbose = True):
                 coadd_count += a.shape[0]
             except:
                 if verbose:
-                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. \
-                          I cut it off at i=',count)
-                astamp = astamp[:coadd_count,:,:]
-                bstamp = bstamp[:coadd_count,:,:]
-                return astamp, bstamp
+                    print('ab_stack_shift: Oops! the box is too big and one star is too close to an edge. Skipping ',k['filename'][i])
+                #count += 1
 
     # Chop off the tops of the cubes to eliminate zero arrays from skipped stars:
     if astamp.shape[0] > count:
@@ -511,7 +520,9 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
                    # subtract radial profile from cubes:\
                    subtract_radial_profile = True,\
                    # User supplied cubes:
-                   acube = None, bcube = None
+                   acube = None, bcube = None,
+                   # DAOStarfinder parameters:
+                   fwhm = 7.8
                 ):
     '''Assemble cubes of images and prepare them for KLIP reduction by: centering/subpixel-aligning images along
     vertical axis, normalizing images by dividing by sum of pixels in image, and masking the core of the central star.
@@ -554,6 +565,8 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
         If True, subtract the median radial profile from each image in the cubes.  Default = True.
     acube, bcube : 3d array
         User can supply already stacked and aligned image cubes and skip the alignment step.
+    fwhm : flt
+        FWHM for Starfinder centering
         
     Returns:
     --------
@@ -563,7 +576,7 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
     if np.size(acube) == 1:
         # collect and align postage stamps of each star:
         from cliotools.bditools import ab_stack_shift
-        astack, bstack = ab_stack_shift(k, boxsize = boxsize,  path_prefix=path_prefix, verbose = verbose)
+        astack, bstack = ab_stack_shift(k, boxsize = boxsize,  fwhm = fwhm, path_prefix=path_prefix, verbose = verbose)
     else:
         # copy user-supplied cubes:
         astack, bstack = acube.copy(),bcube.copy()
@@ -617,6 +630,10 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
 
     return astack5, bstack5
 
+def circle_mask(radius, xsize, ysize, xc, yc, radius_format = 'pixels', cval = 0):
+    xx,yy = np.meshgrid(np.arange(xsize)-xc,np.arange(ysize)-yc)
+    r=np.hypot(xx,yy)
+    return np.where(r<radius)
 
 def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
     ''' Normalize each image in a cube.
@@ -1174,3 +1191,58 @@ def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), c
     plt.title(path.split('/')[0]+' '+Star)
     return fig
 
+#################### contrast stuff ###############################
+
+def deconvolve_app_mag(magT,k):
+    from cliotools.bdi_signal_injection_tools import mag
+    # compute average deltamag in images:
+    deltamagarray = np.array([])
+    for i in range(len(k)):
+        image = fits.getdata(k['filename'][i])
+        if len(image.shape) == 3:
+            image = image[0]
+        else:
+            pass
+        magA, fluxA = mag(image,k['xca'][i],k['yca'][i], returnflux = True)
+        magB, fluxB = mag(image,k['xcb'][i],k['ycb'][i], returnflux = True)
+        deltamag = magA-magB
+        deltamagarray = np.append(deltamagarray,deltamag)
+    deltamag = np.median(deltamagarray)
+    # Compute magA:
+    exp1 = -(deltamag + magT) / 2.5
+    num = 10**exp1
+    denom = 1 + 10**(-deltamag / 2.5)
+    fA = num / denom
+    magA = -2.5*np.log10(fA)
+    # compute magB:
+    fB = 10**(-magT/2.5) - fA
+    magB = -2.5*np.log10(fB)
+    return magA,magB
+
+def mkheader(dataset, star, shape, normalized, inner_masked, outer_masked):
+    """ Make a header for writing psf sub BDI KLIP cubes to fits files
+        in the subtract_cubes function
+    """
+    import time
+    from astropy.io import fits
+    header = fits.Header()
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = '         **  Cube of Star '+star+' PSFs          **'
+    header['COMMENT'] = '         ************************************'
+    header['COMMENT'] = 'Postagestamp cube of PSF images that have been aligned and bad pixel detailed'
+    header['COMMENT'] = 'and are ready to go into PrepareCubes'
+    try:
+        header['NAXIS1'] = str(shape[1])
+        header['NAXIS2'] = str(shape[2])
+        header['NAXIS3'] = str(shape[0])
+    except:
+        header['NAXIS1'] = str(shape[0])
+        header['NAXIS2'] = str(shape[1])
+    header['DATE'] = time.strftime("%m/%d/%Y")
+    header['DATASET'] = dataset
+    header['STAR'] = str(star)
+    header['NORMALIZED'] = normalized
+    header['INNER MASKED'] = inner_masked
+    header['OUTER_MASKED'] = outer_masked
+    header['COMMENT'] = 'by Logan A Pearce'
+    return header

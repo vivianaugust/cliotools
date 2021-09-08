@@ -77,7 +77,7 @@ def diffraction_spike_mask(x,y,mask_image,rotation_angle = 37, xoffsets = [160,1
     return mask_image
 
 def make_global_masks(path, shape, radius = 10, diffraction_spike_rotation_angle = 37, xoffsets = [160,160,-160,-160], 
-                           yoffsets = [-30,30,30,-30]):
+                           yoffsets = [-30,30,30,-30], imlist = [], user_supplied_k = []):
     ''' For a complete raw dataset, make a mask of every star position in Nod 0 and Nod 1.  Must be run after Fidestars 
     and depends on the existence of the file ABLocations in the file path, and that the file path directory only contains
     the good images to skysubbed (i.e. all images commented out in ABLocations are removed from the directory.)
@@ -90,6 +90,10 @@ def make_global_masks(path, shape, radius = 10, diffraction_spike_rotation_angle
         xoffsets, yoffsets (lists): location of verticies of unrotated diffraction spike box. Changing location of \
             x verticies makes box longer/shorter, y vertices makes box thicker/thinner. Default: xoffsets = [160,160,-160,-160]\
             yoffsets = [-30,30,30,-30]
+        imlist (str): if performing action on subset of images in a dataset, supply a list of paths to \
+            image files as this variable
+        user_supplied_k (pd dataframe): if performing action on subset of images in a dataset, supply the
+            dataframe of images with the corresponding x/y star locations with this variable
     
     Returns:
         2d arr: mask for Nod 0 and mask for Nod 1
@@ -97,17 +101,24 @@ def make_global_masks(path, shape, radius = 10, diffraction_spike_rotation_angle
     '''
     from cliotools.cliotools import lod_to_pixels
     radius = lod_to_pixels(radius, 3.9)
-    # Make list of all fits images in folder:
-    os.system('ls '+path+'*0*.fit > list')
-    # Open the list:
-    with open('list') as f:
-        ims = f.read().splitlines()
-    # open the star locations list:
-    k = pd.read_csv(path+'ABLocations', 
+    if len(imlist) == 0:
+        # Make list of all fits images in folder:
+        os.system('ls '+path+'*0*.fit > list')
+        # Open the list:
+        with open('list') as f:
+            ims = f.read().splitlines()
+    else:
+        ims = imlist
+
+    if len(user_supplied_k) == 0:
+        # open the star locations list:
+        k = pd.read_csv(path+'ABLocations', 
                          delim_whitespace = True, # Spaces separate items in the list
                          comment = '#', # Ignore commented rows
                          names=['filename', 'xca','yca', 'xcb', 'ycb'] # specify column names
                         )
+    else:
+        k = user_supplied_k
     
     # Now make a global mask of all Nod 0 and Nod 1 star locations:
     mask0,mask1 = np.empty(shape),np.empty(shape)
@@ -166,7 +177,7 @@ def beam_count(ims):
             count1 += 1
     return count0,count1
 
-def build_reference_stack(path, mask0, mask1, skip_list=False, K_klip = 5):
+def build_reference_stack(path, mask0, mask1, skip_list=False, K_klip = 5, imlist=[]):
     '''Stack reference images into Nx512x1024 array for Nod 0 and Nod 1.
     Written by Logan A. Pearce, 2019
 
@@ -179,6 +190,9 @@ def build_reference_stack(path, mask0, mask1, skip_list=False, K_klip = 5):
                 Default = False
         K_klip : int
             use up to the Kth number of modes to reconstruct the image.  Default = 10
+        imlist : str
+            if performing action on subset of images in a dataset, supply a list of paths to
+            image files as this variable
         
     Returns:
     --------
@@ -192,9 +206,16 @@ def build_reference_stack(path, mask0, mask1, skip_list=False, K_klip = 5):
     # Make a list of all images in the dataset:
     if skip_list == False:
         os.system('ls '+path+'*.fit > list')
-    # Open the list:
-    with open('list') as f:
-        ims = f.read().splitlines()
+
+    if len(imlist) == 0:
+        # Make list of all fits images in folder:
+        os.system('ls '+path+'*0*.fit > list')
+        # Open the list:
+        with open('list') as f:
+            ims = f.read().splitlines()
+    else:
+        ims = imlist
+
     count0,count1 = beam_count(ims)
     
     # Distinguish between fits files that are single images vs data cubes:
@@ -281,6 +302,82 @@ def build_reference_stack(path, mask0, mask1, skip_list=False, K_klip = 5):
         print('K_klip =',K_klip)
         
     return sky0_stack, sky0_stack_masked, sky1_stack, sky1_stack_masked, K_klip
+
+def build_reference_skyframe_stack(path, skip_list=False, K_klip = 5):
+    '''Stack reference images into Nx512x1024 array for Nod 0 and Nod 1.
+       Written by Logan A. Pearce, 2019
+    
+        Parameters:
+        -----------
+            path : str
+                path to directory containing all the images of a single system on a single observing night
+            skip_list : bool 
+                Set to true to skip making a list of all fits files in the directory.  
+                 Default = False
+            K_klip : int
+                use up to the Kth number of modes to reconstruct the image.  Default = 10
+            
+        Returns:
+        --------
+            sky0_stack, sky1_stack : Nx512x1024 array
+                stack of reference images.
+            K_klip : int
+                if N < requested number of modes, return new value of K_klip where 
+                K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
+                otherwise returns requested number of modes.
+    '''
+    # Make a list of all images in the dataset:
+    if skip_list == False:
+        os.system('ls '+path+'*.fit > list')
+        os.system('ls '+path+'skyframes/*.fit > skylist')
+    # Open the list:
+    with open('list') as f:
+        ims = f.read().splitlines()
+    with open('skylist') as f:
+        skyims = f.read().splitlines()
+    count0,count1 = beam_count(ims)
+    skycount0,skycount1 = beam_count(skyims)
+    
+    # Distinguish between fits files that are single images vs data cubes:
+    shape = fits.getdata(ims[0]).shape
+    
+    print('Stacking reference images for',path.split('/')[0],'...')
+    # Each image is a single frame composite of several coadds.
+    sky0_stack = np.zeros((count0,shape[0],shape[1]))
+    sky_stack = np.zeros((skycount0,shape[0],shape[1]))
+    count0, skycount0 = 0,0
+    for j in ims:
+        # Open the image data:
+        image = fits.getdata(j)
+        imhdr = fits.getheader(j)
+        # Divide by number of coadds:
+        image = image/imhdr['COADDS']
+        # Stack the image in the appropriate stack:
+        # add to unmasked stack:
+        sky0_stack[count0,:,:] = image
+        # iterate counter
+        count0 += 1
+        
+    for j in skyims:
+        # Open the image data:
+        image = fits.getdata(j)
+        imhdr = fits.getheader(j)
+        # Divide by number of coadds:
+        image = image/imhdr['COADDS']
+        # Stack the image in the appropriate stack:
+        # add to unmasked stack:
+        sky_stack[skycount0,:,:] = image
+        # iterate counter
+        skycount0 += 1
+    print('I will use ',sky0_stack.shape[0],' images for Nod 0, and ',sky_stack.shape[0],'skyframes')
+    
+    if sky0_stack.shape[0] < K_klip:
+        print('Oops, there are fewer images than your requested number of modes.  Using all the images \
+             in the reference set')
+        K_klip = sky0_stack.shape[0]
+        print('K_klip =',K_klip)
+        
+    return sky0_stack, sky_stack, K_klip
 
 def find_eigenimages(array, K_klip = 5):
     ''' Build a set (of size K_klip) of basis modes from the inputted reference images.
@@ -842,3 +939,238 @@ def findbadpix(std, chunk, n=5):
     badpixmap[badpix] = 1
     return badpix, badpixmap
 
+def stack_em_up(path, skip_list = False, imlist=[]):
+    '''Stack reference images into Nx512x1024 array for Nod 0 and Nod 1.
+    Written by Logan A. Pearce, 2019
+
+    Parameters:
+    -----------
+        path : str
+            path to directory containing all the images of a single system on a single observing night
+        skip_list : bool 
+            Set to true to skip making a list of all fits files in the directory.  
+                Default = False
+        K_klip : int
+            use up to the Kth number of modes to reconstruct the image.  Default = 10
+        imlist : str
+            if performing action on subset of images in a dataset, supply a list of paths to
+            image files as this variable
+        
+    Returns:
+    --------
+        sky0_stack, sky1_stack : Nx512x1024 array
+            stack of reference images.
+        K_klip : int
+            if N < requested number of modes, return new value of K_klip where 
+            K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
+            otherwise returns requested number of modes.
+    '''
+    g = open(path+'skysubbed0.txt','w')
+    h = open(path+'skysubbed1.txt','w')
+    g.close()
+    h.close()
+    # Make a list of all images in the dataset:
+    if skip_list == False:
+        os.system('ls '+path+'*skysub.fit > list')
+
+    if len(imlist) == 0:
+        # Make list of all fits images in folder:
+        os.system('ls '+path+'*0*skysub.fit > list')
+        # Open the list:
+        with open('list') as f:
+            ims = f.read().splitlines()
+    else:
+        ims = imlist
+
+    count0,count1 = beam_count(ims)
+    
+    # Distinguish between fits files that are single images vs data cubes:
+    shape = fits.getdata(ims[0]).shape
+    
+    print('Stacking reference images for',path.split('/')[0],'...')
+    # Make a stack of images to put into PCA analysis:
+    if len(shape) == 3:
+        # Each image is a cube of individual coadds.
+        sky0_stack = np.zeros((count0*shape[0],shape[1],shape[2]))
+        sky1_stack = np.zeros((count1*shape[0],shape[1],shape[2]))
+        #sky0_stack_masked = np.zeros((count0*shape[0],shape[1],shape[2]))
+        #sky1_stack_masked = np.zeros((count1*shape[0],shape[1],shape[2]))
+        # Reset count
+        count0, count1 = 0,0
+        # For each image in the dataset:
+        for i in range(len(ims)):
+            # open the image
+            image = fits.getdata(ims[i])
+            imhdr = fits.getheader(ims[i])
+            
+            # Divide by number of coadds:
+            if imhdr['COADDS'] != 1:
+                image = [image[i]/imhdr['COADDS'] for i in range(shape[0])]
+                
+            # If its nod 0:
+            if imhdr['BEAM'] == 0:
+                # Stack the image cube into one array
+                sky0_stack[count0:count0+image.shape[0],:,:] = image
+                # Apply mask:
+                #image_masked = image.copy()
+                #for j in range(image.shape[0]):
+                #    image_masked[j,~np.isnan(mask0)] = 0
+                # add to masked stack:
+                #sky0_stack_masked[count0:count0+image.shape[0],:,:] = image_masked
+                g = open(path+'skysubbed0.txt','a')
+                g.write(str(count0)+' '+str(ims[i])+' '+str(imhdr['BEAM'])+'\n')
+                g.close()
+                # iterate counter
+                count0 += shape[0]
+            # If its nod 1:
+            if imhdr['BEAM'] == 1:
+                # Stack the image cube into one array
+                sky1_stack[count1:count1+image.shape[0],:,:] = image
+                #image_masked = image.copy()
+                #for j in range(image.shape[0]):
+                #    image_masked[j,~np.isnan(mask1)] = 0
+                #sky1_stack_masked[count1:count1+image.shape[0],:,:] = image_masked
+                g = open(path+'skysubbed1.txt','a')
+                g.write(str(count0)+' '+str(ims[i])+' '+str(imhdr['BEAM'])+'\n')
+                g.close()
+                count1 += shape[0]  
+        
+    elif len(shape) == 2:
+        # Each image is a single frame composite of several coadds.
+        sky1_stack = np.zeros((count1,shape[0],shape[1]))
+        sky0_stack = np.zeros((count0,shape[0],shape[1]))
+        #sky1_stack_masked = np.zeros((count1,shape[0],shape[1]))
+        #sky0_stack_masked = np.zeros((count0,shape[0],shape[1]))
+        count0, count1 = 0,0
+        for j in ims:
+            # Open the image data:
+            image = fits.getdata(j)
+            imhdr = fits.getheader(j)
+            # Divide by number of coadds:
+            image = image/imhdr['COADDS']
+            # Stack the image in the appropriate stack:
+            if imhdr['BEAM'] == 0:
+                # add to unmasked stack:
+                sky0_stack[count0,:,:] = image
+                # Apply mask:
+                #image[~np.isnan(mask0)] = 0
+                # add to masked stack:
+                #sky0_stack_masked[count0,:,:] = image
+                # iterate counter
+                g = open(path+'skysubbed0.txt','a')
+                g.write(str(count0)+' '+str(j)+' '+str(imhdr['BEAM'])+'\n')
+                g.close()
+                count0 += 1
+            if imhdr['BEAM'] == 1:
+                sky1_stack[count1,:,:] = image
+                # Apply mask:
+                #image[~np.isnan(mask1)] = 0
+                # add to masked stack:
+                #sky1_stack_masked[count1,:,:] = image
+                g = open(path+'skysubbed1.txt','a')
+                g.write(str(count1)+' '+str(j)+' '+str(imhdr['BEAM'])+'\n')
+                g.close()
+                count1 += 1
+    print('I will use ',sky0_stack.shape[0],' images for Nod 0, and ',sky1_stack.shape[0],'images for Nod 1')
+        
+    return sky0_stack, sky1_stack
+
+def stack_em_all_up(path, skip_list = False, imlist=[], filesuffix='ssbp'):
+    '''Stack reference images into Nx512x1024 array for Nod 0 and Nod 1.
+    Written by Logan A. Pearce, 2019
+
+    Parameters:
+    -----------
+        path : str
+            path to directory containing all the images of a single system on a single observing night
+        skip_list : bool 
+            Set to true to skip making a list of all fits files in the directory.  
+                Default = False
+        K_klip : int
+            use up to the Kth number of modes to reconstruct the image.  Default = 10
+        imlist : str
+            if performing action on subset of images in a dataset, supply a list of paths to
+            image files as this variable
+        
+    Returns:
+    --------
+        stack : Nx512x1024 array
+            stack of reference images.
+        K_klip : int
+            if N < requested number of modes, return new value of K_klip where 
+            K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
+            otherwise returns requested number of modes.
+    '''
+    g = open(path+'skysubbed.txt','w')
+    g.close()
+    # Make a list of all images in the dataset:
+    if skip_list == False:
+        os.system('ls '+path+'*'+filesuffix+'.fit > list')
+
+    if len(imlist) == 0:
+        # Make list of all fits images in folder:
+        os.system('ls '+path+'*'+filesuffix+'.fit > list')
+        # Open the list:
+        with open('list') as f:
+            ims = f.read().splitlines()
+    else:
+        ims = imlist
+    count = len(ims)
+    
+    # Distinguish between fits files that are single images vs data cubes:
+    shape = fits.getdata(ims[0]).shape
+    
+    print('Stacking reference images for',path.split('/')[0],'...')
+    # Make a stack of images to put into PCA analysis:
+    if len(shape) == 3:
+        # Each image is a cube of individual coadds.
+        stack = np.zeros((count*shape[0],shape[1],shape[2]))
+        count = 0
+        # For each image in the dataset:
+        for i in range(len(ims)):
+            # open the image
+            image = fits.getdata(ims[i])
+            imhdr = fits.getheader(ims[i])
+            
+            # Divide by number of coadds:
+            if imhdr['COADDS'] != 1:
+                image = [image[i]/imhdr['COADDS'] for i in range(shape[0])]
+                
+            # Stack the image cube into one array
+            stack[count:count+image.shape[0],:,:] = image
+            # Apply mask:
+            #image_masked = image.copy()
+            #for j in range(image.shape[0]):
+            #    image_masked[j,~np.isnan(mask0)] = 0
+            # add to masked stack:
+            #sky0_stack_masked[count0:count0+image.shape[0],:,:] = image_masked
+            g = open(path+'skysubbed.txt','a')
+            g.write(str(count+1)+' '+str(ims[i])+' '+str(imhdr['BEAM'])+'\n')
+            g.close()
+            # iterate counter
+            count += shape[0]
+        
+    elif len(shape) == 2:
+        # Each image is a single frame composite of several coadds.
+        stack = np.zeros((count,shape[0],shape[1]))
+        count = 0
+        for j in ims:
+            # Open the image data:
+            image = fits.getdata(j)
+            imhdr = fits.getheader(j)
+            # Divide by number of coadds:
+            image = image/imhdr['COADDS']
+            # Stack the image in the appropriate stack:
+            # add to unmasked stack:
+            stack[count,:,:] = image
+            # Apply mask:
+            #image[~np.isnan(mask0)] = 0
+            # add to masked stack:
+            #sky0_stack_masked[count0,:,:] = image
+            # iterate counter
+            g = open(path+'skysubbed.txt','a')
+            g.write(str(count+1)+' '+str(j)+' '+str(imhdr['BEAM'])+'\n')
+            g.close()
+            count += 1
+        
+    return stack
