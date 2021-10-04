@@ -1,5 +1,11 @@
-from cliotools.bditools import *
-from cliotools.bdi import *
+#from cliotools.bditools import *
+#from cliotools.bdi import *
+
+from cliotools.bditools import PrepareCubes
+import numpy as np
+from astropy.io import fits
+import pandas as pd
+
 
 def GetSNR(path, Star, K_klip, sep, pa, C, boxsize = 50,
                 sepformat = 'lambda/D',
@@ -83,7 +89,8 @@ def GetSNR(path, Star, K_klip, sep, pa, C, boxsize = 50,
     elif Star == 'B':
         acube = SynthCubeObject2.refcube
         bcube = SynthCubeObject2.synthcube
-
+    
+    from cliotools.bdi import BDI
     # create BDI object with injected signal:
     SynthCubeObjectBDI2 = BDI(k, path, K_klip = K_klip, 
                     boxsize = boxsize,         
@@ -188,8 +195,7 @@ def DoSNR(path, Star, K_klip, sep, C,
     arr
         if returnsnrs = True, returns array of SNRs in apertures in the ring
     '''
-    from cliotools.pcaskysub import update_progress
-    from cliotools.bditools import getsnr
+    from cliotools.pca_skysub import update_progress
     # Define starting point pa:
     pa = 270.
     # Number of 1L/D apertures that can fit on the circumference at separation:
@@ -334,7 +340,7 @@ def mag(image, x, y, radius = 3.89245, returnflux = False, returntable = False):
     flt
         signal to noise ratio
     '''
-    from photutils import CircularAperture, CircularAnnulus, aperture_photometry
+    from photutils import CircularAperture, aperture_photometry
     # Position of star:
     positions = [(x,y)]
     # Get sum of all pixel values within radius of center:
@@ -370,7 +376,7 @@ def contrast(image1,image2,pos1,pos2,**kwargs):
         contrast in magnitudes of B component relative to A component
         
     '''
-    from cliotools.bditools import mag
+    from cliotools.bdi_signal_injection_tools import mag
     mag1 = mag(image1,pos1[0],pos1[1], **kwargs)
     mag2 = mag(image2,pos2[0],pos2[1], **kwargs)
     return mag2 - mag1
@@ -444,7 +450,7 @@ def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc,
     2d arr
         image with fake planet with desired parameters. 
     '''
-    from cliotools.bditools import makeplanet
+    from cliotools.bdi_signal_injection_tools import makeplanet
     # sep input into pixels
     if sepformat == 'arcsec':
         pixscale = pixscale/1000 # convert to arcsec/pix
@@ -494,7 +500,6 @@ def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc,
         delta = xmax - image.shape[1]
         xmax = image.shape[1]
         Planet = Planet[:,:(2*boxx-delta)]
-
     if inject_negative_signal:
         Planet = Planet * (-1)
     # account for integer pixel positions:
@@ -507,20 +512,22 @@ def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc,
         synth[ymin:ymax,xmin:xmax] = synth[ymin:ymax,xmin:xmax] + (Planet)
     return synth
 
-def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, **kwargs):
+def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, inject_negative_signal = False, **kwargs):
     ''' Wrapper for injectplanet() that allows for multiple fake planets in one image.
         Parameters are same as injectplanet() except sep, pa, and contrast must all be
         arrays of the same length.  **kwargs are passed to injectplanet().
     '''
-    from cliotools.bditools import injectplanet
+    from cliotools.bdi_signal_injection_tools import injectplanet
     synth = image.copy()
     try:
         for i in range(len(sep)):
             synth1 = injectplanet(synth, imhdr, template, sep[i], pa[i], contrast[i], TC, xc, yc, 
+                                      inject_negative_signal = inject_negative_signal,
                                       **kwargs)
             synth = synth1.copy()
     except:
         synth = injectplanet(synth, imhdr, template, sep, pa, contrast, TC, xc, yc, 
+                                      inject_negative_signal = inject_negative_signal,
                                       **kwargs)
     return synth
 
@@ -622,12 +629,12 @@ class SyntheticSignal(object):
             box = templatecube.shape[1] / 2
         
         # Inject planet signal into science target star:
-        from cliotools.bditools import injectplanets
+        from cliotools.bdi_signal_injection_tools import injectplanets
         synthcube = np.zeros(np.shape(self.sciencecube))
         if len(templatecube) == 0:
             #print('not template provided')
             # If template PSF is not provided by user (this is most common):
-            from cliotools.bditools import contrast
+            from cliotools.bdi_signal_injection_tools import contrast
             # for each image in science cube:
             for i in range(self.sciencecube.shape[0]):
                 # Get template constrast of refcube to sciencecube
@@ -653,12 +660,13 @@ class SyntheticSignal(object):
             # inject signal:
             for i in range(self.sciencecube.shape[0]):
                 if TC == None:
-                    from cliotools.bditools import contrast
+                    from cliotools.bdi_signal_injection_tools import contrast
                     # Get template constrast of refcube to sciencecube
                     TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
                 imhdr = fits.getheader(k['filename'][i])
                 synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, box, box, 
-                                              sepformat = sepformat, wavelength = wavelength, box = box)
+                                              sepformat = sepformat, wavelength = wavelength, box = box, 
+                                              inject_negative_signal = inject_negative_signal)
                 synthcube[i,:,:] = synth
                 
         self.synthcube = synthcube.copy()
@@ -751,8 +759,6 @@ def GetSingleSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube
 
 def GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C ,TC = 0,sep = 4, write_skycube = False,
                                         skycube1 = None, skycube2 = None):
-    from cliotools.pcaskysub import update_progress
-    from cliotools.bditools import getsnr
     # Define starting point pa:
     pa = 270.
     # Number of 1L/D apertures that can fit on the circumference at separation:
@@ -771,7 +777,7 @@ def GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, temp
     return np.mean(snrs)
 
 def GetNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C, TC = 0,sep = 4, write_skycube = False, skycube1 = None, skycube2 = None):
-    from cliotools.pcaskysub import update_progress
+    from cliotools.pca_skysub import update_progress
     snrs = np.zeros(len(C))
     for i in range(len(C)):
         snr1 = GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C[i], TC = 0,sep = 4, write_skycube = write_skycube,

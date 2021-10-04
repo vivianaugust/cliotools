@@ -2,9 +2,15 @@ MANIFEST.in
 README.rst
 setup.py
 cliotools/__init__.py
+cliotools/bdi.py
+cliotools/bdi_signal_injection_tools_deprecated.py
 cliotools/bditools.py
-cliotools/cliotools.py
-cliotools/pcaskysub.py
+cliotools/cliotools_deprecated.py
+cliotools/deprecated.py
+cliotools/global_badpixfix.py
+cliotools/miscellany.py
+cliotools/pca_skysub.py
+cliotools/pca_skysub_wskyframes.py
 cliotools.egg-info/PKG-INFO
 cliotools.egg-info/SOURCES.txt
 cliotools.egg-info/dependency_links.txt

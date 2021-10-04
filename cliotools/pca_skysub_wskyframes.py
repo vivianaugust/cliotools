@@ -107,6 +107,80 @@ def build_reference_stack(path, skip_list=False, K_klip = 10):
         
     return sky0_stack, sky1_stack, K_klip
 
+def build_skyframe_stack(path, skip_list=False, K_klip = 10):
+    '''Stack sky images into Nx512x1024 array for Nod 0 and Nod 1.
+       Written by Logan A. Pearce, 2019
+    
+        Parameters:
+        -----------
+            path : str
+                path to directory containing all the images of a single system on a single observing night
+            skip_list : bool 
+                Set to true to skip making a list of all fits files in the directory.  
+                 Default = False
+            K_klip : int
+                use up to the Kth number of modes to reconstruct the image.  Default = 10
+            
+        Returns:
+        --------
+            sky0_stack, sky1_stack : Nx512x1024 array
+                stack of reference images.
+            K_klip : int
+                if N < requested number of modes, return new value of K_klip where K_klip = min(sky0_stack.shape[0],sky1_stack.shape[0])
+                otherwise returns requested number of modes.
+    '''
+    # Make a list of all images in the dataset:
+    if skip_list == False:
+        os.system('ls '+path+'*.fit > list')
+    # Open the list:
+    with open('list') as f:
+        ims = f.read().splitlines()
+    count0 = len(ims)
+    
+    # Distinguish between fits files that are single images vs data cubes:
+    shape = fits.getdata(ims[0]).shape
+    
+    print('Stacking reference images for',path.split('/')[0],'...')
+    # Make a stack of images to put into PCA analysis:
+    if len(shape) == 3:
+        # Each image is a cube of individual coadds.
+        sky0_stack = np.zeros((count0*shape[0],shape[1],shape[2]))
+        # Reset count
+        count0 = 0
+        # For each image in the dataset:
+        for i in range(len(ims)):
+            # open the image
+            image = fits.getdata(ims[i])
+            imhdr = fits.getheader(ims[i])
+            
+            # Divide by number of coadds:
+            if imhdr['COADDS'] != 1:
+                image = [image[i]/imhdr['COADDS'] for i in range(shape[0])]
+                sky0_stack[count0:count0+image.shape[0],:,:] = image
+                count0 += shape[0]
+        
+    elif len(shape) == 2:
+        # Each image is a single frame composite of several coadds.
+        sky0_stack = np.zeros((count0,shape[0],shape[1]))
+        count0 = 0
+        for j in ims:
+            # Open the image data:
+            image = fits.getdata(j)
+            imhdr = fits.getheader(j)
+            # Divide by number of coadds:
+            image = image/imhdr['COADDS']
+            sky0_stack[count0,:,:] = image
+            count0 += 1
+    print('I will use ',sky0_stack.shape[0],' images')
+    
+    if sky0_stack.shape[0] < K_klip:
+        print('Oops, there are fewer images than your requested number of modes.  Using all the images \
+             in the reference set')
+        K_klip = np.min([sky1_stack.shape[0],sky0_stack.shape[0]])
+        print('K_klip =',K_klip)
+        
+    return sky0_stack, K_klip
+
 def find_eigenimages(array, K_klip = 10):
     ''' Build a set (of size K_klip) of basis modes from the inputted reference images.
     Based on math in Soummer+ 2012 section 2.
@@ -548,7 +622,7 @@ def clio_skysubtract_wskyframes(path, skyframepath, K_klip=5, skip_list = False,
         ims = f.read().splitlines()
     # Build reference stack for each dither position:
     # Skyframes have "Beam" = 0
-    sky0_stack = build_reference_stack(skyframepath)
+    sky0_stack = build_skyframe_stack(skyframepath)
     Z0 = find_eigenimages(sky0_stack[0], K_klip = K_klip)
     # Open each image:
     count = 0

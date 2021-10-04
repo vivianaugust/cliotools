@@ -2,11 +2,12 @@ from astropy.io import fits
 import numpy as np
 import os
 from scipy import ndimage
-import image_registration
 import pandas as pd
 import pickle
 import matplotlib.pyplot as plt
 
+
+################ general clio tools ###########
 def plot(image):
     import matplotlib.pyplot as plt
     from astropy.visualization import ZScaleInterval, ImageNormalize
@@ -41,6 +42,395 @@ def update_progress(n,max_value):
                                                   status)
     sys.stdout.write(text)
     sys.stdout.flush()
+
+def lambdaoverD_to_arcsec(lamb, D = 6.5):
+    """ Compute lamb/D.  Default is for Magellan mirror and CLIO narrow camera pixelscale.
+        Inputs:
+            lamb [um]: central wavelength of filter in microns.  Astropy unit object preferred
+            D [m]: primary mirror diameter.  Astropy unit object required
+            pixscale [mas/pix]: 
+        Returns:
+            loverd [arcsec]: lambda/D in arcsec per L/D
+    """
+    arcsec = (0.2063*(lamb/D))
+    return arcsec
+
+def lambdaoverD_pix(lamb, pixscale = 15.9):
+    from cliotools.bditools import lambdaoverD_to_arcsec
+    import astropy.units as u
+    loverd = lambdaoverD_to_arcsec(lamb)
+    loverd_pix = loverd*u.arcsec.to(u.mas) / pixscale
+    return loverd_pix
+
+def lod_to_arcsec(lod):
+    """ Lambda/D into arcsec for Magellan and 3.9 um filter
+    """
+    return lod * 0.12378
+
+def arcsec_to_lod(arcsec):
+    """ arcsec into Lambda/D for Magellan and 3.9 um filter
+    """
+    return arcsec / 0.12378
+
+def pixels_to_lod(pixels, lamb, pixscale = 15.9):
+    """ Convert a distance in pixels to lambda over D
+    """
+    from cliotools.bditools import lambdaoverD_pix
+    loverd_pix = lambdaoverD_pix(lamb)
+    return pixels/loverd_pix
+
+def lod_to_pixels(lod, lamb, pixscale = 15.9):
+    """ Convert separation in lambda/D to pixels
+    """
+    from cliotools.bditools import lambdaoverD_pix
+    loverd_pix = lambdaoverD_pix(lamb)
+    return lod*loverd_pix
+
+def lod_to_physical(lod, distance, lamb):
+    ''' Convert a distance in lamda over D to AU
+        Inputs:
+            lod [arcsec]: # of lambda over D to convert
+            distance [pc]: distance to system in parsecs
+            lamb [um]: filter central wavelength in microns
+        Returns:
+        
+    '''
+    from cliotools.bditools import lambdaoverD_to_arcsec
+    import astropy.units as u
+    # 1 lambda/D in arcsec per l/D:
+    loverd = lambdaoverD_to_arcsec(lamb)
+    # convert to arcsec:
+    arcsec = lod*loverd
+    return (arcsec * distance)*u.AU
+    
+    
+def physical_to_lod(au, distance, lamb):
+    ''' Convert a physucal distance in AU to lambda over D
+    '''
+    from cliotools.bditools import lambdaoverD_to_arcsec
+    arcsec = au/distance
+    loverd = lambdaoverD_to_arcsec(lamb)
+    return arcsec/loverd
+
+def pixel_seppa(x1,y1,x2,y2,imhdr=None):
+    sep = np.sqrt((x1-x2)**2 + (y1-y2)**2)
+    sep = sep*15.9
+    sep = sep/1000
+    if imhdr:
+        pa = (np.degrees(np.arctan2((x2-x1),(x2-x1)))+270)%360
+        NORTH_CLIO = -1.80
+        derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
+        pa = (pa + derot)
+        return sep,pa%360.
+    else:
+        return sep
+
+def rotate_clio(image, imhdr, rotate_image = True, NORTH_CLIO = -1.80, **kwargs):
+    """Rotate CLIO image to north up east left.
+       Written by Logan A. Pearce, 2020
+       
+       Dependencies: scipy
+
+       Parameters:
+       -----------
+       image : 2d array
+           2d image array
+       imhdr : fits header object
+           header for image to be rotated
+       rotate_image : bool
+           if set to true, return rotated image.  If set
+           to false, return angle by which to rotate an image
+           to make North up East left
+       NORTH_CLIO : flt
+           NORTH_CLIO value.  Default = -1.80
+           value taken from: https://magao-clio.github.io/zero-wiki/d017e/Astrometric_Calibration.html
+       kwargs : for scipy.ndimage
+           
+       Returns:
+       --------
+       if rotate_image = True:
+       imrot : 2d arr 
+           rotated image with north up east left
+       If rotate_image = False:
+       derot : flt
+           angle by which to rotate the image to
+           get north up east left
+    """
+    
+    NORTH_CLIO = -1.80
+    derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
+    if rotate_image == True:
+        imrot = ndimage.rotate(image, derot, **kwargs)
+        return imrot
+    else:
+        return derot
+
+########## Mag and contrast: ###########
+def mag(image, x, y, radius = 9., r_in = 10., r_out = 12., returnflux = False, returntable = False):
+    ''' Compute instrument magnitudes of one object.  Defaults are set to CLIO 3.9um optimal.
+        Parameters:
+        -----------
+        image : 2d array
+            science image
+        x,y : flt
+            x and y pixel location of center of star
+        radius : flt
+            pixel radius for aperture.  Default = 9, approx location of 1st null in
+            CLIO 3.9um 
+        r_in, r_out : flt
+            inside and outside radius for background annulus.  Default = 10,12
+        returnflux : bool
+            if true, return the instrument mag and the raw flux value.
+        returntable : bool
+            if true, return the entire photometry table.
+        Returns:
+        --------
+        mag : flt
+            instrument magnitudes of source
+    '''
+    from photutils import CircularAperture, CircularAnnulus, aperture_photometry
+    # Position of star:
+    positions = [(x,y)]
+    # Use radius equal to the firsl null, 1 lamb/d ~ 8.7 pixels:
+    radius = 9.
+    # Get sum of all pixel values within radius of center:
+    apertures = CircularAperture(positions, r=radius)
+    # Get sum of all pixels in annulus around center to sample background:
+    annulus_apertures = CircularAnnulus(positions, r_in=10., r_out=12.)
+    # Put into list:
+    apers = [apertures, annulus_apertures]
+    # Do photometry on star and background:
+    phot_table = aperture_photometry(image, apers)
+    # Background mean:
+    bkg_mean = phot_table['aperture_sum_1'] / annulus_apertures.area
+    # Backgroud within star aperture:
+    bkg_sum = bkg_mean * apertures.area
+    # Subtract background from star flux:
+    final_sum = phot_table['aperture_sum_0'] - bkg_sum 
+    # Add column to table with this final flux
+    phot_table['Final_aperture_flux'] = final_sum  
+    # Put into instrument magnitudes:
+    mag=(-2.5)*np.log10(phot_table['Final_aperture_flux'][0])
+    if returnflux:
+        return mag, final_sum[0]
+    if returntable:
+        phot_table['Mag'] = mag
+        return mag, phot_table
+    return mag
+
+def contrast(image, pos, **kwargs):
+    ''' Return contrast of component B relative to A in magnitudes
+        Parameters:
+        ------------
+        image : 2d array
+            science image
+        pos : arr
+            x and y pixel location of center of star in order [xa,ya,xb,yb]
+        kwargs : 
+            args to pass to mag function
+        Returns:
+        --------
+        contrast : flt
+            contrast in magnitudes of B component relative to A component
+        
+    '''
+    Amag = mag(image,pos[0],pos[1], **kwargs)
+    Bmag = mag(image,pos[2],pos[3], **kwargs)
+    return Bmag - Amag
+
+
+########## Find Trap B stars: ###########
+
+def findtrapB(image, imstamp, boxsize=50, threshold=1e4, fwhm=10, x1=0, y1=0):
+    """Gotta get fancy to find just those four Trapezium B stars in CLIO.
+       Written by Logan A. Pearce, 2020
+
+       Parameters:
+       -----------
+       image : 2d array
+           image within which to find stars
+       imagetamp : 2d array
+           image postage stamp for looking for sources
+       boxsize : int
+            size to draw box around stars for DAOStarFinder
+            to look for stars.  Box will have sides of length 2*boxsize
+       threshold : int
+           threshold keyword for StarFinder
+       fwhm : int
+           fwhm keyword for StarFinder
+       x1, y1 : flt
+           tell findtrapB where to look for star B1.  If set
+           to 0, findtrapB will find the brightest correlation
+           pixel as location of B1.  Tell findtrapB where to look
+           if B1 is not the brightest star in the image (ex: in L band
+           B2 might be brighter, but in Kp B1 is brightest)
+           
+       Returns:
+       --------
+       x_subpix, y_subpix : flt arr
+           X and Y subpixel locations of star B1, B2, B3, B4 respectively
+    """
+    from scipy import signal, ndimage
+    from photutils import DAOStarFinder
+    import numpy as np
+    from cliotools.bditools import daostarfinder, make_imagestamp
+    
+    # Median filter to smooth image:
+    image = ndimage.median_filter(image, 3)
+    # Create cross-correlation image:
+    corr = signal.correlate2d(image, imstamp, boundary='symm', mode='same')
+    # Initialize output arrays:
+    x_subpix, y_subpix = np.array([]), np.array([])
+    
+    ########### Find B1: ####################
+    # Get x,y:
+    if x1 != 0:
+        x, y, = x1, y1
+    else:
+        y, x = np.unravel_index(np.argmax(corr), corr.shape)
+    # Creat image postage stamp of B1:
+    imagestamp, xmin, xmax, ymin, ymax = make_imagestamp(image, x, y, boxsizex=boxsize, boxsizey=boxsize)
+    # Use starfinder to find B1 subpixel location
+    sources = daostarfinder(imagestamp)
+    xs, ys = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
+    # Append to source list:
+    x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+    
+    ######### Find B2: #######################
+    # Mask B1:
+    corr_masked = corr.copy()
+    image_masked = image.copy()
+    i=0
+    xx,yy = np.meshgrid(np.arange(image.shape[1])-x_subpix[i],np.arange(image.shape[0])-y_subpix[i])
+    rA=np.hypot(xx,yy)
+    radius = 20
+    corr_masked[np.where((rA < radius))] = 0
+    image_masked[np.where((rA < radius))] = 0
+    # Find location of B2:
+    y, x = np.unravel_index(np.argmax(corr_masked), corr.shape)
+    # Create image postage stamp of B2:
+    imagestamp, xmin, xmax, ymin, ymax = make_imagestamp(image, x, y, boxsizex=boxsize, boxsizey=boxsize)
+    # Use starfinder to find B2 subpixel location
+    sources = daostarfinder(imagestamp)
+    xs, ys = (xmin+sources['xcentroid'])[0], (ymin+sources['ycentroid'])[0]
+    # Append to source list:
+    x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+    
+    ######### Find B3: ##########################
+    # Mask B2:
+    corr_masked2 = corr_masked.copy()
+    image_masked2 = image_masked.copy()
+    i=1
+    xx,yy = np.meshgrid(np.arange(image.shape[1])-x_subpix[i],np.arange(image.shape[0])-y_subpix[i])
+    rA=np.hypot(xx,yy)
+    radius=5
+    corr_masked2[np.where((rA < radius))] = 0
+    image_masked2[np.where((rA < radius))] = 0
+    ####### cut out:
+    # We're getting to the two faint stars now, so
+    # let's cut out just the Trapezium B cluster so we don't get fooled by other objects.
+    # Take the mean location of the two bright stars:
+    x2,y2 = np.mean(x_subpix), np.mean(y_subpix)
+    # Find if x-axis or y-axis orientation is bigger:
+    diff = np.array([np.abs(np.diff(x_subpix))[0], np.abs(np.diff(y_subpix))[0]])
+    # Set the boxsize according to orientation:
+    if np.where(np.max([np.diff(x_subpix), np.diff(y_subpix)]))[0]==1:
+        # If oriented along x-axis:
+        boxsizex = 70
+        boxsizey = 50
+    else:
+        # if oriented along y-axis:
+        boxsizex = 50
+        boxsizey = 70
+    # Cut out TrapB section of image and correlation map:   
+    image_masked2, xmin2, xmax2, ymin2, ymax2 = make_imagestamp(image_masked2, x2,y2, \
+                                                                boxsizex=boxsizex, boxsizey=boxsizey)
+    corr_masked2, xmin2, xmax2, ymin2, ymax2 = make_imagestamp(corr_masked2, x2,y2, \
+                                                               boxsizex=boxsizex, boxsizey=boxsizey)
+    # Find B3:
+    y, x = np.unravel_index(np.argmax(corr_masked2), corr_masked2.shape)
+    # Create image postage stamp of B3:
+    imagestamp, xmin, xmax, ymin, ymax = make_imagestamp(image_masked2, x, y, boxsizex=boxsize, boxsizey=boxsize)
+    # Use starfinder to find B2 subpixel location
+    sources = daostarfinder(imagestamp)
+    xs, ys = (xmin2+xmin+sources['xcentroid'])[0], (ymin2+ymin+sources['ycentroid'])[0]
+    x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+    
+    ######### Find B4: ##########################
+    # Mask B3:
+    corr_masked3 = corr_masked.copy()
+    image_masked3 = image_masked.copy()
+    i=2
+    xx,yy = np.meshgrid(np.arange(image.shape[1])-x_subpix[i],np.arange(image.shape[0])-y_subpix[i])
+    rA=np.hypot(xx,yy)
+    radius=20
+    corr_masked3[np.where((rA < radius))] = 0
+    image_masked3[np.where((rA < radius))] = 0
+    # Do a new cutout with large B2/3 mask:
+    x2,y2 = np.median(x_subpix[0:2]), np.median(y_subpix[0:2])
+    image_masked3, xmin2, xmax2, ymin2, ymax2 = make_imagestamp(image_masked3, x2,y2, \
+                                                                boxsizex=boxsizex, boxsizey=boxsizey)
+    corr_masked3, xmin2, xmax2, ymin2, ymax2 = make_imagestamp(corr_masked3, x2,y2, \
+                                                               boxsizex=boxsizex, boxsizey=boxsizey)
+    # Skipping unravel index because it is too faint:
+    sources = daostarfinder(image_masked3)
+    xs, ys = (xmin2+sources['xcentroid'])[0], (ymin2+sources['ycentroid'])[0]
+    x_subpix, y_subpix = np.append(x_subpix, xs), np.append(y_subpix, ys)
+    return x_subpix, y_subpix
+
+
+def daostarfinder_trapB(imagestamp, threshold = 1e4, fwhm = 10):
+    """Find the subpixel location of a single star in a single clio BDI image.
+       Written by Logan A. Pearce, 2020
+
+       Parameters:
+       -----------
+       imagetamp : 2d array
+           image postage stamp for looking for sources
+       threshold : int
+           threshold keyword for StarFinder
+       fwhm : int
+           fwhm keyword for StarFinder
+           
+       Returns:
+       --------
+       sources : table
+           DAOStarFinder output table of sources
+    """
+    from photutils import DAOStarFinder
+    import warnings
+    import numpy as np
+    warnings.filterwarnings('ignore')
+    # Use DAOStarFinder to find subpixel locations:
+    # If the threshold is too high and it can't find a point source, lower the threshold
+    # until it finds something
+    logthreshold = np.log10(threshold)
+    daofind = DAOStarFinder(fwhm=fwhm, threshold=10**logthreshold)
+    sources = daofind(imagestamp)
+    print(source)
+    while sources==None:
+        logthreshold -= 0.1
+        #print(logthreshold)
+        daofind = DAOStarFinder(fwhm=fwhm, threshold=10**logthreshold)
+        sources = daofind(imagestamp)
+
+    return sources
+
+def make_imagestamp(image, x, y, boxsizex=50, boxsizey=50):
+    import numpy as np
+    ymin, ymax = y-boxsizey, y+boxsizey
+    xmin, xmax = x-boxsizex, x+boxsizex
+    if ymin < 0:
+        ymin = 0
+    if ymax > image.shape[0]:
+        ymax = image.shape[0]
+    if xmin < 0:
+        xmin = 0
+    if xmax > image.shape[1]:
+        xmax = image.shape[1]
+    return image[np.int_(ymin):np.int_(ymax),\
+                 np.int_(xmin):np.int_(xmax)], \
+            xmin, xmax, ymin, ymax
 
 ############################ Finding stars in CLIO images ################################
 
@@ -512,7 +902,7 @@ def ab_stack_shift(k, boxsize = 50, fwhm = 7.8, path_prefix='', verbose = True):
 
 def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
                    # normalizing parameters:\
-                   normalize = True, normalizebymask = False,  normalize_radius = [],\
+                   normalize = True, normalizebymask = False,  normalizing_radius = [],\
                    # star masking parameters:\
                    inner_mask_core = True, inner_radius_format = 'pixels', inner_mask_radius = 1., cval = 0,\
                    # masking outer annulus:\
@@ -591,7 +981,7 @@ def PrepareCubes(k, boxsize = 20, path_prefix='', verbose = True,\
     ######## Normalize ###########
     if normalize:
         from cliotools.bditools import normalize_cubes
-        astack2,bstack2 = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalize_radius)
+        astack2,bstack2 = normalize_cubes(astack,bstack, normalizebymask = normalizebymask,  radius = normalizing_radius)
     else:
         astack2,bstack2 = astack.copy(),bstack.copy()
     ####### Inner mask ###########
@@ -658,8 +1048,7 @@ def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
         data = astack
         if normalizebymask:
             from photutils import CircularAperture
-            r = lod_to_pixels(5., 3.9)/2
-            positions = (astamp.shape[1]/2,astamp.shape[2]/2)
+            positions = (astack.shape[1]/2,astack.shape[2]/2)
             aperture = CircularAperture(positions, r=radius)
             # Turn it into a mask:
             aperture_masks = aperture.to_mask(method='center')
@@ -667,6 +1056,7 @@ def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
             aperture_data = aperture_masks.multiply(data[i])
             aperture_data[np.where(aperture_data == 0)] = np.nan
             summed = np.nansum(aperture_data)
+            a[i] = data[i] / summed
         else:
             # get the sum of pixels in the mask:
             summed = np.sum(data[i])
@@ -676,8 +1066,7 @@ def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
         data = bstack
         if normalizebymask:
             from photutils import CircularAperture
-            r = lod_to_pixels(5., 3.9)/2
-            positions = (astamp.shape[1]/2,astamp.shape[2]/2)
+            positions = (astack.shape[1]/2,astack.shape[2]/2)
             aperture = CircularAperture(positions, r=radius)
             # Turn it into a mask:
             aperture_masks = aperture.to_mask(method='center')
@@ -685,6 +1074,7 @@ def normalize_cubes(astack, bstack, normalizebymask = False, radius = []):
             aperture_data = aperture_masks.multiply(data[i])
             aperture_data[np.where(aperture_data == 0)] = np.nan
             summed = np.nansum(aperture_data)
+            b[i] = data[i] / summed
         else:
             # get the sum of pixels in the mask:
             summed = np.sum(data[i])
@@ -718,7 +1108,7 @@ def mask_star_core(astack, bstack, radius, xc, yc, radius_format = 'pixels', cva
     # compute radius of each pixel from center:
     r=np.hypot(xx,yy)
     if radius_format == 'lambda/D':
-        from cliotools.cliotools import lod_to_pixels
+        from cliotools.bditools import lod_to_pixels
         radius = lod_to_pixels(radius, 3.9)
     elif radius_format == 'pixels':
         pass
@@ -757,7 +1147,7 @@ def mask_outer(astack, bstack, radius, xc, yc, radius_format = 'pixels', cval = 
     # compute radius of each pixel from center:
     r=np.hypot(xx,yy)
     if radius_format == 'lambda/D':
-        from cliotools.cliotools import lod_to_pixels
+        from cliotools.bditools import lod_to_pixels
         radius = lod_to_pixels(radius, 3.9)
     elif radius_format == 'pixels':
         pass
@@ -1126,7 +1516,6 @@ def SubtractCubes(acube, bcube, K_klip, k,\
 
 ##########################################################################
 #  Functions for injecting synthetic planet signals                      #
-from cliotools.bdi_signal_injection_tools import *
 
 
 def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), curves_file = [],
@@ -1191,10 +1580,8 @@ def contrast_curve(path, Star, sep = np.arange(1,7,1), C = np.arange(3,7,0.2), c
     plt.title(path.split('/')[0]+' '+Star)
     return fig
 
-#################### contrast stuff ###############################
-
 def deconvolve_app_mag(magT,k):
-    from cliotools.bdi_signal_injection_tools import mag
+    from cliotools.bditools import mag
     # compute average deltamag in images:
     deltamagarray = np.array([])
     for i in range(len(k)):
@@ -1246,3 +1633,970 @@ def mkheader(dataset, star, shape, normalized, inner_masked, outer_masked):
     header['OUTER_MASKED'] = outer_masked
     header['COMMENT'] = 'by Logan A Pearce'
     return header
+
+
+
+def GetSNR(path, Star, K_klip, sep, pa, C, boxsize = 50,
+                sepformat = 'lambda/D',
+                returnsnrs = False, writeklip = False, update_prog = False, 
+                sciencecube = [],
+                refcube = [],
+                templatecube = [], 
+                mask_core = True, mask_outer_annulus = True, mask_radius = 5., outer_mask_radius = 50., subtract_radial_profile = True,
+                normalize = True, normalizebymask = False, normalizing_radius = [],
+                wavelength = 3.9):
+    ''' For a single value of separation, position angle, and contrast, inject a fake signal and perform KLIP reduction.
+
+    sciencecube, refcube, and templatecube are optional varaibles for supplying a previously constructed
+    3d cube of images for doing the KLIP reduction on the science target, using the reference cube, with 
+    fake signal injection provided by the templatecube.  If not provided, the pipeline will construct the necessary 
+    cubes from the images listed in CleanList and the specified science star.  The template star by default is the
+    same as the science star if not provided by user.
+
+    Parameters
+    -----------
+    path : str
+        dataset folder
+    Star : 'A' or 'B'
+        which star had the signal injection
+    K_klip : int
+        number of KLIP modes for the reduction
+    sep : flt
+        separation to test
+    pa : flt
+        position angle in degrees from North
+    C : flt
+        contrast to test
+    sepformat : str
+        format of provided separations, either `lambda/D` or `pixels`.  Default = `lambda/D`
+    returnsnrs : bool
+        if True, return the SNRs array as well as the mean.  Default = False
+    writeklip : bool
+        if True, a fits file of the first injected signal KLIP-reduced image at each contrast and \
+        separation will be written to disk.  Default = False
+    update_prog : bool
+        if True, display a progress bar for computing the SNR in the ring. Default = False, progress \
+        bar within RunContrastCurveCalculation is the priority when running a full calculation
+    sciencecube : 3d arr
+        optional user-provided cube of psf images for doing the KLIP reduction. 
+    refcube : 3d arr
+        optional user-provided cube of reference psfs.
+    templatecube : 3d arr
+        optional user-provded cube of images to use as injected signal psf template.
+    mask_core : bool
+        if True, set all pixels within mask_radius to value of 0 in all images.  Default = True
+    mask_radius : flt
+        radius of inner mask in lambda/D or pixels.  Default = 1. lamdba/D
+    mask_outer_annulus: bool
+        if True, set all pixels outside the specified radius to zero.  Default = False
+    outer_mask_radius : flt
+        Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
+    subtract_radial_profile : bool
+        If True, subtract the median radial profile from each image in the cubes.  Default = True.
+    wavelength : flt
+        central wavelength of filter band in microns.  Default = 3.9
+
+    Returns
+    -------
+    flt
+        SNR for injected signal at that sep, PA, contrast
+    object
+       SyntheticSignal object, cube with injected signal
+    object
+        BDI object, KLIP reduced object with injected signal
+    '''
+    k = pd.read_csv(path+'CleanList', comment='#')
+    
+    SynthCubeObject2 = SyntheticSignal(k, Star, sep, pa, C, verbose = False, 
+                                  sciencecube = sciencecube,
+                                  refcube = refcube,
+                                  templatecube = templatecube
+                                 )
+
+    if Star == 'A':
+        acube = SynthCubeObject2.synthcube
+        bcube = SynthCubeObject2.refcube
+    elif Star == 'B':
+        acube = SynthCubeObject2.refcube
+        bcube = SynthCubeObject2.synthcube
+    
+    from cliotools.bdi import BDI
+    # create BDI object with injected signal:
+    SynthCubeObjectBDI2 = BDI(k, path, K_klip = K_klip, 
+                    boxsize = boxsize,         
+                    normalize = normalize, 
+                    normalizebymask = normalizebymask, 
+                    normalizing_radius = normalizing_radius,       
+                    inner_mask_core = mask_core,        
+                    inner_radius_format = 'pixels',
+                    inner_mask_radius = mask_radius,        
+                    outer_mask_annulus = mask_outer_annulus,     
+                    outer_radius_format = 'pixels',
+                    outer_mask_radius = outer_mask_radius,       
+                    mask_cval = 0,       
+                    subtract_radial_profile = subtract_radial_profile,          
+                    verbose = False,               
+                    acube = acube,    
+                    bcube = bcube   
+                   )
+    # Do klip reduction:
+    SynthCubeObjectBDI2.Reduce(interp='bicubic',
+                 rot_cval=0.,
+                 mask_interp_overlapped_pixels = True
+                ) 
+    if Star == 'A':
+        kliped = SynthCubeObjectBDI2.A_Reduced
+    elif Star == 'B':
+        kliped = SynthCubeObjectBDI2.B_Reduced
+        
+    xc, yc = (0.5*((kliped.shape[1])-1),0.5*((kliped.shape[0])-1))
+    snr = getsnr(kliped, sep, pa, xc, yc, wavelength = wavelength)
+    if writeklip:
+        from astropy.io import fits
+        name = path+'/injectedsignal_star'+Star+'_sep'+'{:.0f}'.format(sep)+'_C'+'{:.1f}'.format(C)+'.fit'
+        fits.writeto(name,kliped,overwrite=True)
+    
+    return snr, SynthCubeObject2, SynthCubeObjectBDI2
+
+def DoSNR(path, Star, K_klip, sep, C, 
+                sepformat = 'lambda/D',
+                sep_cutout_region = [0,0], pa_cutout_region = [0,0],
+                returnsnrs = False, writeklip = False, update_prog = False, 
+                sciencecube = [],
+                refcube = [],
+                templatecube = [], 
+                mask_core = True, mask_outer_annulus = True, mask_radius = 5., outer_mask_radius = 50.,
+                normalize = True, normalizebymask = False, normalizing_radius = [],
+                subtract_radial_profile = True, wavelength = 3.9
+                ):
+    ''' For a single value of separation and contrast, compute the SNR at that separation by computing mean and 
+    std deviation of SNRs in apertures in a ring at that sep, a la Mawet 2014 (see Fig 4).
+
+    sciencecube, refcube, and templatecube are optional varaibles for supplying a previously constructed
+    3d cube of images for doing the KLIP reduction on the science target, using the reference cube, with 
+    fake signal injection provided by the templatecube.  If not provided, the pipeline will construct the necessary 
+    cubes from the images listed in CleanList and the specified science star.  The template star by default is the
+    same as the science star if not provided by user.
+
+    Parameters
+    -----------
+    path : str
+        dataset folder
+    Star : 'A' or 'B'
+        which star had the signal injection
+    K_klip : int
+        number of KLIP modes for the reduction
+    sep : flt
+        separation to compute SNR in ring at that sep.
+    C : flt
+        contrast of inject signal
+    sepformat : str
+        format of provided separations, either `lambda/D` or `pixels`.  Default = `lambda/D`
+    sep_cutout_region, pa_cutout_region : tuple, tuple
+        do not include apertures that fall within this sep/pa box in SNR calc.  Sep in lambda/D, pa in degrees
+    returnsnrs : bool
+        if True, return the SNRs array as well as the mean.  Default = False
+    writeklip : bool
+        if True, a fits file of the first injected signal KLIP-reduced image at each contrast and \
+        separation will be written to disk.  Default = False
+    update_prog : bool
+        if True, display a progress bar for computing the SNR in the ring. Default = False, progress \
+        bar within RunContrastCurveCalculation is the priority when running a full calculation
+    sciencecube : 3d arr
+        optional user-provided cube of psf images for doing the KLIP reduction. 
+    refcube : 3d arr
+        optional user-provided cube of reference psfs.
+    templatecube : 3d arr
+        optional user-provded cube of images to use as injected signal psf template.
+    mask_core : bool
+        if True, set all pixels within mask_radius to value of 0 in all images.  Default = True
+    mask_radius : flt
+        radius of inner mask in lambda/D or pixels.  Default = 1. lamdba/D
+    mask_outer_annulus: bool
+        if True, set all pixels outside the specified radius to zero.  Default = False
+    outer_mask_radius : flt
+        Set all pixels outside this radius to 0 if mask_outer_aunnulus set to True.
+    subtract_radial_profile : bool
+        If True, subtract the median radial profile from each image in the cubes.  Default = True.
+    wavelength : flt
+        central wavelength of filter band in microns.  Default = 3.9
+
+    Returns
+    -------
+    flt
+        mean SNR for that ring
+    arr
+        if returnsnrs = True, returns array of SNRs in apertures in the ring
+    '''
+    from cliotools.pca_skysub import update_progress
+    # Define starting point pa:
+    pa = 270.
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    pas = np.arange(pa+2*dTheta,pa+360-2*dTheta,dTheta)%360
+    # Exclude cutout region if applicable:
+    if sep >= sep_cutout_region[0] and sep <= sep_cutout_region[1]:
+        cutouts = np.where(pas > pa_cutout_region[1])[0]
+        cutouts = np.append(cutouts,np.where(pas < pa_cutout_region[0])[0])
+        pas = pas[cutouts]
+    # create empty container to store results:
+    snrs = np.zeros(len(pas))
+    # create synth cube with injected signal:
+    boxsize = sciencecube.shape[1] * 0.5
+    for i in range(len(pas)):
+        if i == 0 and writeklip:
+            do_writeklip = True
+        else:
+            do_writeklip = False
+        snr, SynthCubeObject, SynthCubeObjectBDI = GetSNR(path, Star, K_klip, sep, pas[i], C, 
+                boxsize = boxsize,
+                sepformat = sepformat,
+                returnsnrs = returnsnrs, writeklip = do_writeklip, update_prog = False, 
+                sciencecube = sciencecube,
+                refcube = refcube,
+                templatecube = templatecube, 
+                mask_core = mask_core, mask_outer_annulus = mask_outer_annulus, 
+                mask_radius = mask_radius, outer_mask_radius = outer_mask_radius,
+                normalize = normalize, normalizebymask = normalizebymask, normalizing_radius = normalizing_radius,
+                subtract_radial_profile = subtract_radial_profile, wavelength = wavelength
+                )
+        snrs[i] = snr
+        if update_prog:
+            update_progress(i+1,len(pas))
+        
+    if returnsnrs:
+        return np.mean(snrs), snrs
+    
+    return np.mean(snrs)
+
+
+def getsnr(image, sep, pa, xc, yc, wavelength = 3.9, radius = 0.5, radius_format = 'lambda/D', return_signal_noise = False):
+    ''' Get SNR of injected planet signal using method and Student's T-test
+        statistics described in Mawet 2014
+
+    Parameters:
+    -----------
+    image : 2d arr
+        KLIP reduced image with injected planet signal at (sep,pa)
+    sep : flt
+        separation of injected signal in L/D units
+    pa : flt
+        position angle of inject signal relative to north in degrees
+    xc, yc : flt or int
+        (x,y) pixel location of center of star
+    wavelength : flt
+        central wavelength in microns of image filter. Used for converting 
+        from L/D units to pixels.  Default = 3.9
+    return_signal_noise : bool
+        if True, return SNR, signal with background subtracted, noise level, background level
+    
+    Returns:
+    --------
+    flt
+        Signal-to-Noise ratio for given injected signal
+            
+    '''
+    from cliotools.bditools import lod_to_pixels
+    from photutils import CircularAperture, aperture_photometry
+    radius = lod_to_pixels(radius, wavelength)
+    lod = lod_to_pixels(1., wavelength)
+    # convert sep in L/D to pixels:
+    seppix = lod_to_pixels(sep, wavelength)
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from center of one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    pas = np.arange(pa+2*dTheta,pa+360-dTheta,dTheta)%360
+    # create emptry container to store results:
+    noisesums = np.zeros(len(pas))
+    # for each noise aperture:
+    for i in range(len(pas)):
+        # lay down a photometric aperture at that point:
+        xx = seppix*np.sin(np.radians((pas[i])))
+        yy = seppix*np.cos(np.radians((pas[i])))
+        xp,yp = xc-xx,yc+yy
+        aperture = CircularAperture([xp,yp], r=radius)
+        # sum pixels in aperture:
+        phot = aperture_photometry(image, aperture)
+        # add to noise container:
+        noisesums[i] = phot['aperture_sum'][0]
+    # the noise value is the std dev of pixel sums in each
+    # noise aperture:
+    noise = np.std(noisesums)
+    # Compute signal of injected planet in signal aperture:
+    xx = seppix*np.sin(np.radians((pa)))
+    yy = seppix*np.cos(np.radians((pa)))
+    xp,yp = xc-xx,yc+yy
+    # Lay down aperture at planet location:
+    aperture = CircularAperture([xp,yp], r=radius)
+    # compute pixel sum in that location:
+    phot = aperture_photometry(image, aperture)
+    signal = phot['aperture_sum'][0]
+    signal_without_bkgd = signal.copy()
+    # compute mean background:
+    bkgd = np.mean(noisesums)
+    # Eqn 9 in Mawet 2014:
+    signal = signal - bkgd
+    snr = signal / ( noise * np.sqrt(1+ (1/np.size(pas))) )
+    if return_signal_noise:
+        return snr, signal_without_bkgd, noise, bkgd
+    return snr
+
+
+def mag(image, x, y, radius = 3.89245, returnflux = False, returntable = False):
+    ''' Compute instrument magnitudes of one object.  Defaults are set to CLIO 3.9um optimal.
+
+    Parameters:
+    -----------
+    image : 2d array
+        science image
+    x,y : flt
+        x and y pixel location of center of star
+    radius : flt
+        pixel radius for aperture.  Default = 3.89, approx 1/2 L/D for 
+        CLIO 3.9um 
+    r_in, r_out : flt
+        inside and outside radius for background annulus.  Default = 10,12
+    returnflux : bool
+        if true, return the instrument mag and the raw flux value.
+    returntable : bool
+        if true, return the entire photometry table.
+    Returns:
+    --------
+    flt
+        instrument magnitudes of source
+    flt
+        signal to noise ratio
+    '''
+    from photutils import CircularAperture, aperture_photometry
+    # Position of star:
+    positions = [(x,y)]
+    # Get sum of all pixel values within radius of center:
+    aperture = CircularAperture(positions, r=radius)
+    # Do photometry on star:
+    phot_table = aperture_photometry(image, aperture)
+    m =(-2.5)*np.log10(phot_table['aperture_sum'][0])
+    if returnflux:
+        return m, phot_table['aperture_sum'][0]
+    if returntable:
+        phot_table['Mag'] = m
+        return m, phot_table
+    return m
+
+def contrast(image1,image2,pos1,pos2,**kwargs):
+    ''' Return contrast of component 2 relative to 1 in magnitudes
+
+    Parameters:
+    ------------
+    image1 : 2d array
+        science image
+    image2 : 2d array
+        image of other object
+    pos1 : arr
+        x and y pixel location of center of star1 in order [x1,y1]
+    pos2 : arr
+        x and y pixel location of center of star2 in order [x2,y2]
+    kwargs : 
+        args to pass to mag function
+    Returns:
+    --------
+    flt
+        contrast in magnitudes of B component relative to A component
+        
+    '''
+    from cliotools.bditools import mag
+    mag1 = mag(image1,pos1[0],pos1[1], **kwargs)
+    mag2 = mag(image2,pos2[0],pos2[1], **kwargs)
+    return mag2 - mag1
+
+def makeplanet(template, C, TC):
+    ''' Make a simulated planet psf with desired contrast using template psf
+
+    Parameters:
+    -----------
+    template : 2d image
+        sample PSF for making simulated planet
+    C : flt
+        desired contrast in magnitudes
+    TC : flt
+        known contrast of template psf relative to science target
+    Returns:
+    --------
+    2d arr
+        scaled simulated planet psf with desired contrast to science target
+    '''
+    # Amount of magnitudes to scale template by to achieve desired
+    # contrast with science target:
+    D = C - TC
+    # Convert to flux:
+    scalefactor = 10**(-D/2.5)
+    # Scale template pixel values:
+    Pflux = template*scalefactor
+    return Pflux
+
+def injectplanet(image, imhdr, template, sep, pa, contrast, TC, xc, yc, 
+                 sepformat = 'lambda/D', 
+                 pixscale = 15.9,
+                 wavelength = 'none',
+                 box = 70,
+                 inject_negative_signal = False
+                ):
+    ''' Using a template psf, place a fake planet at the desired sep, pa, and
+        contrast from the central object.  PA is measured relative to true north
+        (rather than up in image)
+
+    Parameters:
+    -----------
+    image : 2d array
+        science image
+    imhdr : fit header
+        science image header
+    template : 2d array
+        template psf with known contrast to central object
+    sep : flt or fltarr
+        separation of planet placement in either arcsec, mas, pixels, or lambda/D
+    pa : flt or fltarr
+        position angle of planet relative to north in DEG
+    contrast : flt or fltarr
+        desired contrast of planet with central object
+    TC : flt
+        template contrast, known contrast of template psf relative to science target
+    xc, yc : flt
+        x,y pixel position of central object
+    sepformat : str
+        format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
+        Default = 'pixels'
+    pixscale : flt
+        pixelscale in mas/pixel.  Default = 15.9 mas/pix, pixscale for CLIO narrow camera
+    wavelength : flt
+        central wavelength of filter, needed if sepformat = 'lambda/D'
+    box : int
+        size of template box.  Template will be box*2 x box*2
+    
+    Returns:
+    --------
+    2d arr
+        image with fake planet with desired parameters. 
+    '''
+    from cliotools.bditools import makeplanet
+    # sep input into pixels
+    if sepformat == 'arcsec':
+        pixscale = pixscale/1000 # convert to arcsec/pix
+        sep = sep / pixscale
+    if sepformat == 'mas':
+        sep = sep / pixscale
+    if sepformat == 'lambda/D':
+        from cliotools.bditools import lod_to_pixels
+        if wavelength == 'none':
+            raise ValueError('wavelength input needed if sepformat = lambda/D')
+        sep = lod_to_pixels(sep, wavelength)
+    # pa input - rotate from angle relative to north to angle relative to image up:
+    #    do the opposite of what you do to derotate images
+    NORTH_CLIO = -1.80
+    derot = imhdr['ROTOFF'] - 180. + NORTH_CLIO
+    pa = (pa + derot)
+        
+    # Get cartesian location of planet:
+    xx = sep*np.sin(np.radians((pa)))
+    yy = sep*np.cos(np.radians((pa)))
+    xs = np.int_(np.floor(xc-xx))
+    ys = np.int_(np.floor(yc+yy))
+    # Make planet from template at desired contrast
+    Planet = makeplanet(template, contrast, TC)
+    # Make copy of image:
+    synth = image.copy()
+    # Get shape of template:
+    boxy, boxx = np.int_(Planet.shape[0]/2),np.int_(Planet.shape[1]/2)
+    x,y = xs,ys
+    ymin, ymax = y-boxy, y+boxy
+    xmin, xmax = x-boxx, x+boxx
+    # Correct for sources near image edge:
+    delta = 0
+    if ymin < 0:
+        delta = ymin
+        ymin = 0
+        Planet = Planet[(0-delta):,:]
+    if ymax > image.shape[0]:
+        delta = ymax - image.shape[0]
+        ymax = image.shape[0]
+        Planet = Planet[:(2*boxy-delta) , :]
+    if xmin < 0:
+        delta = xmin
+        xmin = 0
+        Planet = Planet[:,(0-delta):]
+    if xmax > image.shape[1]:
+        delta = xmax - image.shape[1]
+        xmax = image.shape[1]
+        Planet = Planet[:,:(2*boxx-delta)]
+    if inject_negative_signal:
+        Planet = Planet * (-1)
+    # account for integer pixel positions:
+    if synth[ymin:ymax,xmin:xmax].shape != Planet.shape:
+        try:
+            synth[ymin:ymax+1,xmin:xmax] = synth[ymin:ymax+1,xmin:xmax] + (Planet)
+        except:
+            synth[ymin:ymax,xmin:xmax+1] = synth[ymin:ymax,xmin:xmax+1] + (Planet)
+    else:
+        synth[ymin:ymax,xmin:xmax] = synth[ymin:ymax,xmin:xmax] + (Planet)
+    return synth
+
+def injectplanets(image, imhdr, template, sep, pa, contrast, TC, xc, yc, inject_negative_signal = False, **kwargs):
+    ''' Wrapper for injectplanet() that allows for multiple fake planets in one image.
+        Parameters are same as injectplanet() except sep, pa, and contrast must all be
+        arrays of the same length.  **kwargs are passed to injectplanet().
+    '''
+    from cliotools.bditools import injectplanet
+    synth = image.copy()
+    try:
+        for i in range(len(sep)):
+            synth1 = injectplanet(synth, imhdr, template, sep[i], pa[i], contrast[i], TC, xc, yc, 
+                                      inject_negative_signal = inject_negative_signal,
+                                      **kwargs)
+            synth = synth1.copy()
+    except:
+        synth = injectplanet(synth, imhdr, template, sep, pa, contrast, TC, xc, yc, 
+                                      inject_negative_signal = inject_negative_signal,
+                                      **kwargs)
+    return synth
+
+class SyntheticSignal(object):
+    def __init__(self, k, Star, sep, pa, C, sepformat = 'lambda/D', boxsize = 50,
+                sciencecube = [], refcube = [], templatecube = [],
+                template = [], TC = None, use_same = True, verbose = True,
+                inject_negative_signal = False, wavelength = 3.9
+                ):
+        ''' Class for creating and controling images with synthetic point source signals ("planet") injected.
+
+        Written by Logan A. Pearce, 2020
+        Dependencies: numpy, scipy, pandas
+
+        Attributes:
+        -----------
+        k : str
+            pandas datafrom made from importing "CleanList"
+        Star : 'A' or 'B'
+            star to put the fake signal around
+        sep : flt
+            separation of planet placement in either arcsec, mas, pixels, or lambda/D [prefered]
+        pa : flt
+            position angle for planet placement in degrees from North
+        C : flt
+            desired contrast of planet with central object
+        sepformat : str
+            format of inputted desired separation. Either 'arcsec', 'mas', pixels', or 'lambda/D'.
+            Default = 'lambda/D'
+        boxsize : int
+            size of box of size "2box x 2box" for image stamps, if cubes aren't supplied by user
+        sciencecube : 3d arr
+            optional user input the base images to use in injection for science images.  If not provided \
+            script will generate them from files in CleanList and specified science star
+        refcube : 3d arr
+            optional user input the base images to use in injection for reference images in KLIP reduction.  If not provided \
+            script will generate them from files in CleanList and specified science star
+        templatecube : 3d arr
+            user input the base images to use as psf template in creating the fake signal. If not provided \
+            script will generate them from files in CleanList and specified science star.
+        template : 2d arr
+            optional user input for a psf template not built from the BDI dataset.
+        TC : flt
+            if external template provided, you must specify the contrast of the template relative to the science star
+        use_same : bool
+            If True, use the same star as a template for a synthetic psf signal around itself.  If false, use the opposite star. \
+            Default = True
+        verbose : bool
+            If True, print status of things.  Default = True
+        inject_negative_signal : bool
+            If True, inject a negative planet signal instead of positive.  Default = False.
+
+        '''
+        from cliotools.bditools import contrast
+        self.k = k
+        self.Star = Star
+        self.sep = sep
+        self.pa = pa
+        self.C = C
+        self.sepformat = sepformat
+        self.verbose = verbose
+        # If no image cubes provided:
+        if np.size(sciencecube) == 1:
+            # Make image cubes without normalizing or masking:
+            self.astamp, self.bstamp = PrepareCubes(self.k, 
+                                                    boxsize = boxsize, 
+                                                    normalize = False,
+                                                    inner_mask_core = False,         
+                                                    outer_mask_annulus = False,
+                                                    verbose = self.verbose
+                                                    )
+            # If using the same star as the psf template:
+            if use_same:
+                if Star == 'A':
+                    self.sciencecube = self.astamp.copy()
+                    self.templatecube = self.astamp.copy()
+                elif Star == 'B':
+                    self.sciencecube = self.bstamp.copy()
+                    self.templatecube = self.bstamp.copy()
+            # else use the other star as psf template:
+            else:
+                if Star == 'A':
+                    self.sciencecube = self.astamp.copy()
+                    self.templatecube = self.bstamp.copy()
+                elif Star == 'B':
+                    self.sciencecube = self.bstamp.copy()
+                    self.templatecube = self.astamp.copy()
+            # Assign the opposite star as the reference set for KLIP reduction:
+            if Star == 'A':
+                self.refcube = self.bstamp.copy()
+            elif Star == 'B':
+                self.refcube = self.astamp.copy()
+            box = boxsize
+        # Else assign user supplied cubes:
+        else:
+            self.sciencecube = sciencecube
+            self.refcube = refcube
+            self.templatecube = templatecube
+            box = templatecube.shape[1] / 2
+        
+        # Inject planet signal into science target star:
+        from cliotools.bditools import injectplanets
+        synthcube = np.zeros(np.shape(self.sciencecube))
+        if len(templatecube) == 0:
+            #print('not template provided')
+            # If template PSF is not provided by user (this is most common):
+            from cliotools.bditools import contrast
+            # for each image in science cube:
+            for i in range(self.sciencecube.shape[0]):
+                # Get template constrast of refcube to sciencecube
+                center = (0.5*((self.sciencecube.shape[2])-1),0.5*((self.sciencecube.shape[1])-1))
+                TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
+                # image header must be provided to 
+                # accomodate rotation from north up reference got PA to image reference:
+                imhdr = fits.getheader(self.k['filename'][i]) 
+                # Inject the desired signal into the science cube:
+                synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, 
+                                      center[0], center[1], 
+                                      sepformat = self.sepformat, wavelength = wavelength, box = box, 
+                                      inject_negative_signal = inject_negative_signal)
+                # place signal-injected image into stack of images:
+                synthcube[i,:,:] = synth
+                
+        else:
+            center = (0.5*((self.sciencecube.shape[2])-1),0.5*((self.sciencecube.shape[1])-1))
+            # If external template is provided: (this might happen if other star is saturated, etc)
+            #if TC == None:
+                # Known contrast of template to science star must be provided
+                #raise ValueError('template contrast needed')
+            # inject signal:
+            for i in range(self.sciencecube.shape[0]):
+                if TC == None:
+                    from cliotools.bditools import contrast
+                    # Get template constrast of refcube to sciencecube
+                    TC = contrast(self.sciencecube[i],self.templatecube[i],center,center)
+                imhdr = fits.getheader(k['filename'][i])
+                synth = injectplanets(self.sciencecube[i], imhdr, self.templatecube[i], sep, pa, C, TC, box, box, 
+                                              sepformat = sepformat, wavelength = wavelength, box = box, 
+                                              inject_negative_signal = inject_negative_signal)
+                synthcube[i,:,:] = synth
+                
+        self.synthcube = synthcube.copy()
+
+################## Tools for estimating noise floor contrast ###################################
+
+def makeskycube(path,x,y,k,box,lim_lod = 10, write_skycube = False):
+    from cliotools.bditools import circle_mask
+    from cliotools.bditools import lod_to_pixels
+    xx,yy = np.meshgrid(np.arange(x-box,x+box+1,1),np.arange(y-box,y+box+1,1))
+    lim = lod_to_pixels(lim_lod, 3.9)
+    im = fits.getdata(k['filename'][0])
+    count = 0
+    keep = np.array([])
+    im = fits.getdata(k['filename'][0])
+    ndim = len(im.shape)
+    if ndim == 2:
+        skycube = np.zeros([len(k),box*2,box*2])
+    if ndim == 3:
+        s = im.shape[0]
+        skycube = np.zeros([(len(k)+1)*s,box*2,box*2])
+    for i in range(len(k)):
+        if ndim == 2:
+            tooclose = False
+            im = fits.getdata(k['filename'][i])
+            sky = im[y-box:y+box,x-box:x+box]
+            xca,yca = k['xca'][i],k['yca'][i]
+            xcb,ycb = k['xcb'][i],k['ycb'][i]
+            ra = circle_mask(lim,im.shape[1],im.shape[0], xca, yca)
+            rb = circle_mask(lim,im.shape[1],im.shape[0], xcb, ycb)
+            skycube[count,:,:] = sky
+            count += 1
+        if ndim == 3:
+            im = fits.getdata(k['filename'][i])
+            for j in range(im.shape[0]):
+                sky = im[j,y-box:y+box,x-box:x+box]
+                xca,yca = k['xca'][i],k['yca'][i]
+                xcb,ycb = k['xcb'][i],k['ycb'][i]
+                ra = circle_mask(lim,im.shape[2],im.shape[1], xca, yca)
+                rb = circle_mask(lim,im.shape[2],im.shape[1], xcb, ycb)
+                skycube[count+j,:,:] = sky
+            count += 1   
+    #print(keep)
+    #skycube = skycube[np.int_(keep)]
+    if write_skycube:
+        fits.writeto(path+'skycube.fits',skycube,overwrite = True)
+    return skycube
+
+def GetSingleSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C ,TC = 0,sep = 4, pa = 270., write_skycube = False,
+                                skycube1 = None, skycube2 = None):
+    from cliotools.bdi import BDI
+    from cliotools.bditools import getsnr,injectplanets
+    # Make two skycubes:
+    if np.size(skycube1) == 1:
+        skycube1 = makeskycube(path, x1,y1,k,box, write_skycube=write_skycube)
+    if np.size(skycube2) == 1:
+        skycube2 = makeskycube(path, x2,y2,k,box, write_skycube=write_skycube)
+    
+    smallest = np.min([skycube1.shape[0],templatecube.shape[0]])
+    # inject fake signal into skycube1:
+    synthcube = skycube1.copy()
+    center = (0.5*((skycube1.shape[2])-1),0.5*((skycube1.shape[1])-1))
+    for i in range(smallest):
+        imhdr = fits.getheader(k['filename'][i])
+        synthcube[i,:,:] = injectplanets(skycube1[i], imhdr, templatecube[i], sep, pa, C, TC, 
+                                          center[0], center[1], box = box, wavelength = 3.9)
+    # Make BDIObject and reduce:
+    k = pd.read_csv(path+'CleanList', 
+                         delim_whitespace = False,  # Spaces separate items in the list
+                         comment = '#',             # Ignore commented rows
+                        )
+    BDIobject = BDI(k, path, K_klip = K_klip,
+                    boxsize = box,
+                    path_prefix = '',
+                    normalize = False,
+                    inner_mask_core = False,
+                    outer_mask_annulus = False,    
+                    subtract_radial_profile = False,
+                    verbose = False,
+                    acube = synthcube,
+                    bcube = skycube2
+                   )               
+    BDIobject.Reduce(interp='bicubic',
+                     rot_cval=0.,
+                     mask_interp_overlapped_pixels = False
+                    ) 
+    # compute SNR:
+    snr = getsnr(BDIobject.A_Reduced, sep, pa, center[0], center[1] , wavelength = 3.9)
+    return snr, BDIobject
+
+def GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C ,TC = 0,sep = 4, write_skycube = False,
+                                        skycube1 = None, skycube2 = None):
+    # Define starting point pa:
+    pa = 270.
+    # Number of 1L/D apertures that can fit on the circumference at separation:
+    Napers = np.floor(sep*2*np.pi)
+    # Change in angle from one aper to the next:
+    dTheta = 360/Napers
+    # Create array around circumference, excluding the ones immediately before and after
+    # where the planet is:
+    pas = np.arange(pa,pa+360-dTheta,dTheta)%360
+    # create empty container to store results:
+    snrs = np.zeros(len(pas))
+    for i in range(len(pas)):
+        snr, BDIobject2 = GetSingleSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, 
+                                            templatecube, C ,TC = 0,sep = 4, pa = pas[i], write_skycube = write_skycube, skycube1 = skycube1, skycube2 = skycube2)
+        snrs[i] = snr
+    return np.mean(snrs)
+
+def GetNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C, TC = 0,sep = 4, write_skycube = False, skycube1 = None, skycube2 = None):
+    from cliotools.pca_skysub import update_progress
+    snrs = np.zeros(len(C))
+    for i in range(len(C)):
+        snr1 = GetSingleContrastSNRForNoiseFloor(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C[i], TC = 0,sep = 4, write_skycube = write_skycube,
+                            skycube1 = skycube1, skycube2 = skycube2)
+        snrs[i] = snr1
+        update_progress(i+1,len(C))
+    return snrs
+
+def GetNoiseFloors(path, k, x1, y1, x2, y2, K_klip, box, templatecube, C, TC = 0,sep = 4, write_skycube = False, overwrite = False, 
+                    skycube1 = None, skycube2 = None, filesuffix=''):
+    from scipy import interpolate
+    n = {}
+    for Klip in K_klip:
+        print('Testing KLIP modes:',Klip)
+        snrs = GetNoiseFloor(path, k, x1, y1, x2, y2, np.array([Klip]), box, templatecube, C, TC = 0,sep = 4, write_skycube = write_skycube, 
+                            skycube1 = skycube1, skycube2 = skycube2)
+        pickle.dump(snrs,open(path+'NoiseFloorSNRS_Kklip'+str(Klip)+filesuffix+'.pkl','wb'))
+        newC = np.linspace(np.min(C),np.max(C),100)
+        f = interpolate.interp1d(C, snrs, fill_value='extrapolate')
+        contrast = f(newC)
+        ind = np.where(contrast <= 5.0)
+        try:
+            noise_floor = newC[ind][0]
+        except:
+            print('didnt fall below 5, skipping')
+            continue
+        n.update({Klip:noise_floor})
+        pickle.dump(n,open(path+'NoiseFloors'+filesuffix+'.pkl','wb'))
+
+def get_phoenix_model(model, wavelength_lim = None, DF = -8.0):
+    ''' Open *.7 spectral file from https://phoenix.ens-lyon.fr/Grids/.  Explanataion of file
+    at https://phoenix.ens-lyon.fr/Grids/FORMAT
+    
+    Args:
+        model (str): path to model file
+        wavelength_lim (flt): cut off wavelength in Ang at red end
+        DF (flt): DF value for converting model to Ergs/sec/cm**2/A, from the "format" page.  DF=-8.0 for
+            modern models
+    Returns:
+        pd datafram with columns 'Wavelength','Flux','BBFlux'; flux, BBflux in Ergs/sec/cm**2/A, wavelength in Ang
+        
+    '''
+    t = pd.read_table(model, delim_whitespace=True, usecols=[0,1,2], skiprows=50000,
+                     names=['Wavelength','Flux','BBFlux'])
+    # convert from IDL double float precision to Python-ese:
+    t['BBFlux'] = t['BBFlux'].str.replace('D','e')
+    t['Flux'] = t['Flux'].str.replace('D','e')
+    # Convert string to float and add DF:
+    t['Flux'] = t['Flux'].astype(float) + DF
+    t['BBFlux'] = t['BBFlux'].astype(float) + DF
+    # sort dataframe by wavelength in case it is not sorted:
+    t = t.sort_values(by=['Wavelength'])
+    # convert wavelength to microns:
+    #angstroms_to_um = 1/10000
+    #t['Wavelength'] = t['Wavelength'] * angstroms_to_um
+    # limit the output to desired wavelength range, because the model 
+    # goes out to 100's of microns:
+    if wavelength_lim:
+        lim = np.where(t['Wavelength'] < wavelength_lim)[0][-1]
+        t = t.loc[0:lim]
+    return t
+
+def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux = [], filesuffix = ''):
+    d = distance
+    ############# Filter zero point fluxes: ###################
+    # the wavelengths of the filter bands:
+    wavelengths = np.array([1.24,1.65,2.2,3.35,4.6]) #microns
+    # Filter zero points:
+    # 2MASS:
+    f0J = ( 1594*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.235 * u.um)),
+           27.8*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.235 * u.um)) )
+    f0H = ( 1024*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.662 * u.um)),
+           20.0*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(1.662 * u.um)) )
+    f0K = ( 666.7*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(2.159 * u.um)),
+           12.6*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(2.159 * u.um)) )
+    # WISE:
+    f0335 = 309.540 #Jy
+    f0335 = f0335*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(3.35 * u.um))
+    f046 = 171.787 # Jy
+    f046 = f046*u.Jy.to(u.erg / u.s / u.cm**2 / u.AA, equivalencies=u.spectral_density(4.6 * u.um))
+    #put in array:
+    f0 = np.array([f0J[0],f0H[0],f0K[0],f0335,f046])
+    
+    ############# Convert app mags to fluxes: ###################
+    # convert m to fluxes in those filters:
+    fluxes = f0*10**(-m/2.5)
+    
+    ############# Interpolate to 3.9 microns flux using models: ###################
+    if np.size(interpflux) == 0:
+        interpflux = np.zeros(len(models))
+        for i in range(len(models)):
+            r = fits.open('../model_spectra/'+models[i])
+            data = r[1].data
+            ind = np.where((data['WAVELENGTH'] < 33500.1) & (data['WAVELENGTH'] > 33400) )[0]
+            try:
+                ind = ind[-1]
+            except:
+                pass
+            scale_factor = fluxes[3]/(data['FLUX'][ind])
+            scaledflux = data['FLUX']*scale_factor
+            ind2 = np.where((data['WAVELENGTH'] < 39000.1) & (data['WAVELENGTH'] > 38950) )[0]
+            try:
+                ind2 = ind2[-1]
+            except:
+                pass
+            interpflux[i] = scaledflux[ind2]
+    
+    ############# Compute primary's true flux: ##################
+    primary_true_flux = np.mean(interpflux) # in physical units ergs s^-1 cm^-2 Ang^-1
+    primary_true_flux_err = np.std(interpflux)
+    
+    ############# Convert to apparent magnitude: #############
+    # open Vega's model:
+    model = 'alpha_lyr_mod_004.fits'
+    r = fits.open('../model_spectra/'+model)
+    data = r[1].data
+    ind = np.where((data['WAVELENGTH'] < 39000.1) & (data['WAVELENGTH'] > 38950) )[0]
+    f_vega = data['FLUX'][ind]
+    primary_app_mag = -2.5*np.log10(primary_true_flux/f_vega)[0]
+    
+    ############# Compute contrast of A relative to B in images: ############
+    fivesigmacontrast = reloadA.fivesigmacontrast
+    sep = reloadA.resep_au
+    from cliotools.bditools import contrast
+    cont = np.zeros(len(k))
+    for i in range(len(k)):
+        image = fits.getdata(k['filename'][i])
+        if len(image.shape) == 2:
+            cont[i] = contrast(image,image,[k['xca'][i],k['yca'][i]],[k['xcb'][i],k['ycb'][i]])
+        elif len(image.shape) == 3:
+            cont[i] = contrast(image[0],image[0],[k['xca'][i],k['yca'][i]],[k['xcb'][i],k['ycb'][i]])
+
+    ABcontrast = np.mean(cont)
+    
+    ############# Apparent mag os object at the 5 sigma contrast limit for star A: ################
+    fivesigmacontrastA = fivesigmacontrast
+    fivesigma_app_mag = primary_app_mag + fivesigmacontrastA
+    
+    ########## Convert to absolute mag: ################
+    fivesigma_abs_Mag = fivesigma_app_mag - 5*np.log10(d[0]) + 5
+    
+    ########## load BT Settl grids #####################
+    # Load BT Settl grids:
+    f = pd.read_table("../isochrones/model.BT-Settl.MKO.txt",header=3,delim_whitespace=True)
+    # we want to find a mass by interpolating from our literature age value and
+    # out just computed L' magnitudes:
+    BTmass = f['M/Ms'].values
+    BTage = f['t(Gyr)'].values
+    BTL = f["L'"].values
+    
+    ########### Interpolate mass for age and L' mag: ###################
+    from scipy.interpolate import griddata
+    import pickle
+
+    BTagearray = np.random.normal(age[0],age[1],100000)
+
+    # For each abs magnitude value:
+    fivesigma_mass_limit = np.zeros(len(fivesigma_abs_Mag))
+    for i in range(len(fivesigma_abs_Mag)):
+        # Generate an array of L' values around the mag value with error
+        # (a placeholder for now, I haven't computed error accurately)
+        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        # interpolate masses from a grid of ages and L' mag:
+        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
+
+    pickle.dump(fivesigma_mass_limit, open(path+'StarA_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+filesuffix+'.pkl','wb'))
+    
+    ############## Repeat for B ##########################
+    fivesigmacontrast = reloadB.fivesigmacontrast
+    fivesigmacontrastB = fivesigmacontrast + ABcontrast
+    # The apparent magnitude of an object at the 5 sigma constrast limit around B:
+    fivesigma_app_mag = primary_app_mag + fivesigmacontrastB
+    # distance modulus:
+    fivesigma_abs_Mag = fivesigma_app_mag - 5*np.log10(d[0]) + 5
+    
+    # Interpolate masses:
+    BTagearray = np.random.normal(age[0],age[1],100000)
+    # For each abs magnitude value:
+    fivesigma_mass_limit = np.zeros(len(fivesigma_abs_Mag))
+    for i in range(len(fivesigma_abs_Mag)):
+        # Generate an array of L' values around the mag value with error
+        # (a placeholder for now, I haven't computed error accurately)
+        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        # interpolate masses from a grid of ages and L' mag:
+        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
+    pickle.dump(fivesigma_mass_limit, open(path+'StarB_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+filesuffix+'.pkl','wb'))
