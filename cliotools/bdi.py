@@ -652,7 +652,8 @@ class ContrastCurve(object):
                             sep_in_au = True, distance = None,
                             plot_mass_limits = False, fivesigma_mass_limit = [], legend = False,
                             plot_all = True, plot_noise_floor = False, noise_floor = [],
-                            color='#8531E6', label=[], alpha = 1, save_plot = False, filename = []
+                            color='#8531E6', label=[], alpha = 1, save_plot = False, filename = [],
+                            legend_loc = 'upper right'
                             ):
         ''' Plot just the 5-sigma contrast curve limit.
 
@@ -695,18 +696,21 @@ class ContrastCurve(object):
             plt.style.use('default')
 
         fig, ax = plt.subplots()
+        if plot_all:
+            ax2 = ax.twinx()
+            ax3 = ax.twiny()
         
         if plot_all:
             if yaxis_left == 'mag contrast':
                 Y1 = self.fivesigmacontrast
                 alpha1 = 0
-                Y1_label = 'Contrast [3.9 mags]'
+                Y1_label = 'Contrast [magnitudes]'
                 ax.invert_yaxis()
             elif yaxis_left == 'flux contrast':
                 Y1 = -self.fivesigmacontrast/2.5
                 alpha1 = 0
-                Y1_label = 'log(Contrast)'
-                ax.invert_yaxis()
+                Y1_label = r"log$_{10}$(L$^{'}$\, Flux\,Contrast)"
+                #ax.invert_yaxis()
             elif yaxis_left == 'mass limits':
                 Y1 = self.fivesigma_mass_limit
                 alpha1 = alpha
@@ -717,14 +721,20 @@ class ContrastCurve(object):
                 
             if yaxis_right == 'mag contrast':
                 Y2 = self.fivesigmacontrast
-                alpha2 = 0
-                Y2_label = 'Contrast [3.9 mags]'
+                if yaxis_left == 'mass limits':
+                    alpha2 = 0
+                else:
+                    alpha2 = alpha
+                Y2_label = 'Contrast [magnitudes]'
                 ax2.invert_yaxis()
             elif yaxis_right == 'flux contrast':
                 Y2 = -self.fivesigmacontrast/2.5
-                alpha2 = 0
-                Y2_label = 'log(Contrast)'
-                ax2.invert_yaxis()
+                if yaxis_left == 'mass limits':
+                    alpha2 = 0
+                else:
+                    alpha2 = alpha
+                Y2_label = r"log$_{10}$(L$^{'}$\, Flux\,Contrast)"
+                #ax2.invert_yaxis()
             elif yaxis_right == 'mass limits':
                 Y2 = self.fivesigma_mass_limit
                 alpha2 = alpha
@@ -784,8 +794,6 @@ class ContrastCurve(object):
                 ax.invert_yaxis()
 
         elif plot_all:
-            ax2 = ax.twinx()
-            ax3 = ax.twiny()
             if legend:
                 if len(label) == 0:
                     label = str(self.K_klip)
@@ -815,13 +823,20 @@ class ContrastCurve(object):
             ax3.set_xlabel(X3_label)
             ax3.xaxis.labelpad = 10
             if plot_noise_floor:
-                ax.plot(self.resep, [noise_floor[int(self.K_klip)]]*len(self.resep_au), color=color, alpha = 0.5, ls=':')
+                if xaxis_bottom == 'lambda/D':
+                    noise_floor_X = self.resep
+                elif xaxis_bottom == 'AU':
+                    noise_floor_X = self.resep_au
+                elif xaxis_bottom == 'arcsec':
+                    from cliotools.bditools import lod_to_arcsec
+                    noise_floor_X = lod_to_arcsec(self.resep)
+                ax.plot(noise_floor_X, [noise_floor[int(self.K_klip)]]*len(self.resep_au), color=color, alpha = 0.5, ls=':')
             if legend:
                 if alpha1 == 0:
                     ax_handle = handle2
                 if alpha2 == 0:
                     ax_handle = handle1
-                plt.legend(handles = [ax_handle], labels=[label], handletextpad=0.2, fontsize = fontsize)
+                plt.legend(handles = [ax_handle], labels=[label], handletextpad=0.2, fontsize = fontsize, loc = legend_loc)
                 
         ax.grid(ls=':')
         plt.tight_layout()
@@ -883,7 +898,7 @@ class ContrastCurve(object):
 
         if yaxis_left == 'mag contrast':
             Y1 = self.fivesigmacontrast
-            Y1_label = 'Contrast [3.9 mags]'
+            Y1_label = 'Contrast [magnitudes]'
             ax.invert_yaxis()
         elif yaxis_left == 'flux contrast':
             Y1 = -self.fivesigmacontrast/2.5
@@ -949,6 +964,151 @@ class ContrastCurve(object):
             ax_handle = handle1
             plt.legend(handles = [ax_handle], labels=[label], handletextpad=0.2, fontsize = fontsize, loc = legend_loc)
                 
+        ax.grid(ls=':')
+        plt.tight_layout()
+
+        if save_plot:
+            plt.savefig(filename)
+
+        return fig
+
+    def ContrastCurve5SigmaPlotContrastOnly(self, fontsize=15, plotstyle = 'default', 
+                            yaxis_left = 'flux contrast',
+                            xaxis_bottom = 'arcsec', xaxis_top = 'AU',
+                            distance = None,  fivesigma_mass_limit = [], legend = False,
+                            plot_noise_floor = False, noise_floor = [],
+                            color='#8531E6', label=[], alpha = 1, save_plot = False, filename = [],
+                            sep_in_au = True, legend_loc = 'upper right'
+                            ):
+        ''' Plot just the 5-sigma contrast curve limit.
+
+        Parameters
+        ----------
+        fontsize : int 
+            fontsize for plot labels. Default = 15
+        plotstyle : str
+            mpl plot style. Default = 'default'
+        sep_in_au : bool
+            if True, plot separation in AU instead of lambda/D if not plotting them both on one plot.  Only used
+            when plot_all = False
+        distance : tuple, flt
+            if sep_in_au = True, provide distance and error of system for the converstion from lambda/D to AU
+        plot_mass_limits : bool
+            if True, plot mass on Y-axis instead of magnitudes. Default = False
+        fivesigma_mass_limit : arr
+            if plotting mass limits, provide masses to plot on y-axis.
+        xaxis_bottom, x_axis_top : str
+            specify what to plot on top and bottom x axis. Either 'lambda/D','AU', or 'arcsec'
+        yaxis_left, yaxis_right : str
+            specify waht to plot on left and right y axis. Either 'mag contrast', 'flux contrast', or 'mass limits'.
+        color : str
+            color hexcode for line
+        label : str
+            label for plot legend.
+        alpha : flt
+            visibility of plotted curve line.
+        '''
+        self.fivesigma_mass_limit = fivesigma_mass_limit
+        
+        self.Compute5SigmaContrast(sep_in_au = sep_in_au, distance = distance)
+
+        if not hasattr(self, 'plotstyle'):
+            self.plotstyle = plotstyle
+        try:
+            plt.style.use(self.plotstyle)
+        except:
+            plt.style.use('default')
+
+        fig, ax = plt.subplots()
+        ax2 = ax.twinx()
+        ax3 = ax.twiny()
+        if yaxis_left == 'mag contrast':
+            Y1 = self.fivesigmacontrast
+            Y1_label = 'Contrast [magnitudes]'
+            ax.invert_yaxis()
+            #Y2 = -self.fivesigmacontrast/2.5
+            Y2_label = r"log$_{10}$(L$^{'}$\, Flux\,Contrast)"
+        elif yaxis_left == 'flux contrast':
+            Y1 = -self.fivesigmacontrast/2.5
+            Y1_label = r"log$_{10}$(L$^{'}$\, Flux\,Contrast)"
+            #Y2 = self.fivesigmacontrast
+            Y2_label = 'Contrast [magnitudes]'
+            ax2.invert_yaxis()
+            #ax2.set_yticklabels(str(np.sort(self.fivesigmacontrast)))
+            #ax2.set_ylabel('Contrast [magnitudes]')
+        else:
+            raise ValueError('Set "yaxis_bottom" and "yaxis_top" must be either "flux contrast",\
+                or "mag constrast"')
+            
+        if xaxis_bottom == 'lambda/D':
+            X1 = self.resep
+            X1_label = r'Sep [$\frac{\lambda}{D}$]'
+        elif xaxis_bottom == 'AU':
+            X1 = self.resep_au
+            X1_label = r'Sep [AU]'
+        elif xaxis_bottom == 'arcsec':
+            from cliotools.bditools import lod_to_arcsec
+            X1 = lod_to_arcsec(self.resep)
+            X1_label = r'Sep [arcsec]'
+        else:
+            raise ValueError('Set "xaxis_bottom" and "xaxis_top" must be either "lambda/D", "arcsec" or "AU"')
+            
+        if xaxis_top == 'lambda/D':
+            X3 = self.resep
+            X3_label = r'Sep [$\frac{\lambda}{D}$]'
+        elif xaxis_top == 'AU':
+            X3 = self.resep_au
+            X3_label = r'Sep [AU]'
+        elif xaxis_top == 'arcsec':
+            from cliotools.bditools import lod_to_arcsec
+            X3 = lod_to_arcsec(self.resep) 
+            X3_label = r'Sep [arcsec]'
+        else:
+            raise ValueError('Set "xaxis_bottom" and "xaxis_top" must be either "lambda/D", "arcsec" or "AU"')
+
+        if legend:
+            if len(label) == 0:
+                label = str(self.K_klip)+" KLIP Modes"
+        if plot_noise_floor:
+            if len(noise_floor) == 0:
+                raise ValueError('Noise floor must be provided.')
+        if len(fivesigma_mass_limit) == 0:
+            raise ValueError('5 sigma mass limit must be provided.')
+        
+        # make the plot:
+        handle1, = ax.plot(X1,Y1,alpha = alpha, color=color)
+        ax.set_xlabel(X1_label)
+        ax.set_ylabel(Y1_label)
+        
+        ax2.set_ylabel(Y2_label)
+        
+        ax3.plot(X3,Y1,alpha = 0, color=color)
+        ax3.set_xlabel(X3_label)
+        ax3.xaxis.labelpad = 10
+
+        if plot_noise_floor:
+            if xaxis_bottom == 'lambda/D':
+                noise_floor_X = self.resep
+            elif xaxis_bottom == 'AU':
+                noise_floor_X = self.resep_au
+            elif xaxis_bottom == 'arcsec':
+                from cliotools.bditools import lod_to_arcsec
+                noise_floor_X = lod_to_arcsec(self.resep)
+            if yaxis_left == 'mag contrast':
+                noise_floor_Y = [noise_floor[int(self.K_klip)]]*len(self.resep_au)
+            elif yaxis_left == 'flux contrast':
+                noise_floor_Y = np.array([noise_floor[int(self.K_klip)]]*len(self.resep_au)) / -2.5
+            ax.plot(noise_floor_X, noise_floor_Y, color=color, alpha = 0.5, ls=':')
+        if legend:
+            ax_handle = handle1
+            plt.legend(handles = [ax_handle], labels=[label], handletextpad=0.2, fontsize = fontsize, loc = legend_loc)
+        
+        y1, y2 = ax.get_ylim()
+        if yaxis_left == 'mag contrast':
+            ax2.set_ylim(-y1/2.5, -y2/2.5)
+        if yaxis_left == 'flux contrast':
+            ax2.set_ylim(-y1*2.5, -y2*2.5)
+            
         ax.grid(ls=':')
         plt.tight_layout()
 

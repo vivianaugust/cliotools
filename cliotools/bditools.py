@@ -5,6 +5,7 @@ from scipy import ndimage
 import pandas as pd
 import pickle
 import matplotlib.pyplot as plt
+import astropy.units as u
 
 
 ################ general clio tools ###########
@@ -2600,3 +2601,278 @@ def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux =
         BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
         fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
     pickle.dump(fivesigma_mass_limit, open(path+'StarB_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+filesuffix+'.pkl','wb'))
+
+
+def load_masslimits(path):
+    sp = pickle.load(open('/Users/loganpearce/Dropbox/Uarizona/research/bdi/system-parameters.pkl','rb'))
+    box = sp[path+'box']
+    distance = sp[path+'distance']
+    d = distance
+    sep = sp[path+'sep']
+    C = sp[path+'C']
+    K_klipA = sp[path+'K_klipA']
+    K_klipB = sp[path+'K_klipB']
+    filesuffix = sp[path+'filesuffix'] 
+    mass_limit_filesuffix = sp[path+'mass_limit_filesuffix']
+    today = sp[path+'today']
+    inner_mask = 1.0
+    Stars = ['A','B']
+    
+    from cliotools.bdi import ContrastCurve
+    from cliotools.bditools import lod_to_pixels
+    inner_mask = lod_to_pixels(inner_mask, 3.9)
+    astamp = fits.getdata(path+'acube_box'+str(box)+'_bpf'+filesuffix+'.fits')
+    bstamp = fits.getdata(path+'bcube_box'+str(box)+'_bpf'+filesuffix+'.fits')
+    outer_mask = box
+    Star = Stars[0]
+    K_klip = K_klipA
+    reloadA = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadA.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadA.Compute5SigmaContrast(sep_in_au = True, distance = d)
+    reloadA.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+
+    Star = Stars[1]
+    K_klip = K_klipB
+    reloadB = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadB.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadB.Compute5SigmaContrast(sep_in_au = True, distance = d)
+    reloadB.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+    return reloadA,reloadB
+
+
+def load_masslimits(path):
+    box = sp[path+'box']
+    distance = sp[path+'distance']
+    d = distance
+    sep = sp[path+'sep']
+    C = sp[path+'C']
+    K_klipA = sp[path+'K_klipA']
+    K_klipB = sp[path+'K_klipB']
+    filesuffix = sp[path+'filesuffix'] 
+    mass_limit_filesuffix = sp[path+'mass_limit_filesuffix']
+    today = sp[path+'today']
+    inner_mask = 1.0
+    Stars = ['A','B']
+    
+    from cliotools.bdi import ContrastCurve
+    from cliotools.bditools import lod_to_pixels
+    inner_mask = lod_to_pixels(inner_mask, 3.9)
+    astamp = fits.getdata(path+'acube_box'+str(box)+'_bpf'+filesuffix+'.fits')
+    bstamp = fits.getdata(path+'bcube_box'+str(box)+'_bpf'+filesuffix+'.fits')
+    outer_mask = box
+    Star = Stars[0]
+    K_klip = K_klipA
+    reloadA = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadA.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadA.Compute5SigmaContrast(sep_in_au = True, distance = d)
+    reloadA.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+
+    Star = Stars[1]
+    K_klip = K_klipB
+    reloadB = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadB.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadB.Compute5SigmaContrast(sep_in_au = True, distance = d)
+    reloadB.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+    return reloadA,reloadB
+
+def d2Ndmda(m,a, Mstar, 
+            m1 = 5, m2 = 81, 
+            a1 = 1, 
+            a2 = 100):
+    """ Nielsen+2019 Eqn 7 occurrence rates for substellar companions 
+    """
+    if m <= 13:
+        alpha = np.random.normal(-2.277,0.75)
+        beta = np.random.normal(-1.68,0.55)
+        gamma = np.random.normal(2.03,1.0)
+        f = np.random.normal(3.5,1.6) / 100
+    else:
+        alpha = np.random.normal(-0.47,1.25)
+        beta = np.random.normal(-0.65,1.25)
+        gamma = np.random.normal(-0.85,1.5)
+        f = np.random.normal(0.8,0.5) / 100
+    
+    C1 = ( (alpha + 1) / (m1**(alpha+1) - m2**(alpha+1)) )
+    C1 *= ( (beta + 1) / (a1**(beta+1) - a2**(beta+1)) )
+    
+    return f * C1 * (m**alpha) * (a**beta) * ((Mstar/1.75)**gamma)
+
+def d2Ndmda_smooth(m,a, Mstar, 
+            m1 = 5, m2 = 81, 
+            a1 = 1, 
+            a2 = 100):
+    """ Nielsen+2019 occurence rates for substellar companions
+    """
+    if m <= 13:
+        alpha = -2.277
+        beta = -1.68
+        gamma = 2.03
+        f = 3.5 / 100
+    else:
+        alpha = -0.47
+        beta = -0.65
+        gamma = -0.85
+        f = 0.8 / 100
+    
+    C1 = ( (alpha + 1) / (m1**(alpha+1) - m2**(alpha+1)) )
+    C1 *= ( (beta + 1) / (a1**(beta+1) - a2**(beta+1)) )
+    
+    return f * C1 * (m**alpha) * (a**beta) * ((Mstar/1.75)**gamma)
+
+def prob_of_detecting_substellar_companion(path, Nsamples = 500000, dm = 0.1, savemaps = True):
+    ''' Using the occurence rates of Nielsen+2019, compute the percentage of
+    substellar companions we would have detected around our star in our survey.
+    '''
+    sp = pickle.load(open('/Users/loganpearce/Dropbox/Uarizona/research/bdi/system-parameters.pkl','rb'))
+    colors = np.array(['#8531E6','#E66550', '#F5B92B','#8531E6','#E66550', 
+                       '#F5B92B','#8531E6','#E66550', '#F5B92B'])
+    linestyles = np.array(['-','-','-','-.','-.','-.',':',':',':'])
+    import matplotlib.colors as colorz
+    from scipy import interpolate
+    from myastrotools.orbittools import draw_orbits, keplersconstant, keplerian_to_cartesian
+    
+    # Load survey mass limits:
+    MstarA = sp[path+'massA']
+    MstarB = sp[path+'massB']
+    StarName = sp[path+'StarName']
+    reloadA,reloadB = load_masslimits(path)
+    Stars = ['A','B']
+    file = 'paper/detection_probability_maps/substellar-detection-results.txt'
+    
+    g = open(file,'a')
+    out = path.split('/')[0]+' '+StarName +'\n'
+    g.write(out)
+    g.close()
+
+    for Star in Stars:
+        g = open(file,'a')
+        out = 'Star: '+Star+'\n'
+        g.write(out)
+        g.close()
+        
+        if Star == 'A':
+            reload = reloadA
+        if Star == 'B':
+            reload = reloadB
+        
+        ########## 1. Generate probability distribution function:
+        # Create array of companion masses in Nielsen+2019 regime
+        companion_mass_array = np.arange(5,81,1)
+        # Create array of semimajor axis:
+        sma_array = np.linspace(1, 100,len(companion_mass_array))
+        # create empty array:
+        distribution = np.zeros((sma_array.shape[0],companion_mass_array.shape[0], 100))
+        # for each mass bin:
+        for i,x in enumerate(companion_mass_array):
+            # for each sma bin:
+            for j,y in enumerate(sma_array):
+                # randomly draw from the power law parameters and Eqn 7 equation 100 times:
+                for k in range(100):
+                    distribution[j,i,k] = d2Ndmda(x,y,MstarA[0])
+        # Compute mean and std deviation:
+        distrib = np.median(distribution, axis = 2)
+        distrib_std = np.std(distribution, axis = 2)
+        # Integrate the distribution to get the total occurrence rate in the
+        # # 1-100AU, 5-80Mjup range:
+        dm = (80-5)/len(companion_mass_array)
+        da = (100-1)/len(sep_array)
+        distrib_final = distrib.T * dm * da
+        occurrence_rate = np.sum(distrib_final)
+        ##### Turn into a PDF:
+        # Resample onto more dense grid:
+        f = interpolate.interp2d(sep_array,companion_mass_array, distrib, kind='cubic')
+        dm = 0.1
+        companion_mass_array_new = np.arange(5,81,dm)
+        sma_array_new = np.linspace(1,100,len(companion_mass_array_new))
+        da = (100-1)/len(companion_mass_array_new)
+        distrib_new = f(sma_array_new,companion_mass_array_new)
+        distrib_final_new = distrib_new.T * dm * da
+        # Normalize to turn into a PDF:
+        pdf = distrib_final_new / (np.sum(distrib_final_new))
+
+        ########## 2. Monte Carlo a set of simulated observations and convert sma to project separation:
+        # Get 1D marginal probability distributions:
+        mass_marginal = np.array([np.sum(pdf[:,i]) for i in range(pdf.shape[0])])
+        sma_marginal = np.array([np.sum(pdf[i,:]) for i in range(pdf.shape[1])])
+        # Draw a set of random masses and smas weighted by PDF:
+        random_masses = np.random.choice(companion_mass_array_new,size = Nsamples, p = mass_marginal)
+        random_smas = np.random.choice(sma_array_new,size = Nsamples, p = sma_marginal)
+        # For each random sma, draw a random set of orbital elements:
+        sma, ecc, inc, argp, lon, orbit_fraction = draw_orbits(Nsamples)
+        lon = np.random.uniform(0.0,360.0,Nsamples)
+        kep = keplersconstant(MstarA[0]*u.Msun,1e-3*u.Msun)
+        meananom = 2*np.pi*orbit_fraction
+        pos, vel, acc = keplerian_to_cartesian(random_smas*u.AU,ecc,inc,argp,lon,meananom,kep)
+        # Project onto sky plane:
+        proj_sep = np.sqrt(pos[:,0]**2 + pos[:,1]**2).value
+        # Restrict to only companions within the survey separation range:
+        ind = np.where(proj_sep <= np.max(reload.resep_au.value))
+        proj_sep = proj_sep[ind]
+        random_masses = random_masses[ind]
+        random_masses_smooth = random_masses_smooth[ind]
+        ind = np.where(proj_sep > np.min(reload.resep_au.value))
+        proj_sep = proj_sep[ind]
+        random_masses = random_masses[ind]
+        random_masses_smooth = random_masses_smooth[ind]
+        # Create a histogram:
+        h, xedges, yedges = np.histogram2d(proj_sep,random_masses,bins=100)
+        # Resample contrast limits onto same grid as histogram:
+        f = interpolate.interp1d(reloadB.resep_au,reloadB.fivesigma_mass_limit*1000)
+        resampled_mass_limits = f(xedges)
+        # For each mass bin, find all indicies that are greater than the contrast limit
+        # at that sep:
+        indicies = {}
+        for i in range(len(xedges)):
+            ind = np.where(yedges > resampled_mass_limits[i])
+            indicies.update({i:ind})
+        # Create a mask that is 0 below mass limit and 1 above:
+        mask = np.zeros((yedges.shape[0],xedges.shape[0]))
+        for i in range(h.shape[0]):
+            ind = indicies[i]
+            mask[ind[0],i] = 1.0
+        mask = mask[1:,1:]
+        # Sum up all the companions above the mass limit:
+        Ndetections = np.sum(h*mask)
+        # Divide by total number of companions:
+        Detection_percent = Ndetections/Nsamples
+        # Multiply by occurrence rate to get total probability:
+        detection_probability = Detection_percent * occurrence_rate
+
+
+
