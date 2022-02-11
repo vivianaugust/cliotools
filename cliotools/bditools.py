@@ -2659,6 +2659,9 @@ def load_masslimits(path):
 
 
 def load_masslimits(path):
+    import os
+    file = os.path.join(os.path.dirname(__file__),'system-parameters.pkl')
+    sp = pickle.load(open(file,'rb'))
     box = sp[path+'box']
     distance = sp[path+'distance']
     d = distance
@@ -2755,7 +2758,7 @@ def d2Ndmda_smooth(m,a, Mstar,
     
     return f * C1 * (m**alpha) * (a**beta) * ((Mstar/1.75)**gamma)
 
-def prob_of_detecting_substellar_companion(path, Nsamples = 500000, dm = 0.1, savemaps = True):
+def prob_of_detecting_substellar_companion_deprecated(path, Nsamples = 500000, dm = 0.1, savemaps = True):
     ''' Using the occurence rates of Nielsen+2019, compute the percentage of
     substellar companions we would have detected around our star in our survey.
     '''
@@ -2874,5 +2877,96 @@ def prob_of_detecting_substellar_companion(path, Nsamples = 500000, dm = 0.1, sa
         # Multiply by occurrence rate to get total probability:
         detection_probability = Detection_percent * occurrence_rate
 
+###################### Completeness Maps ###################################
+def MakeMap(path, Star, Npoints = 100):
+    sp = pickle.load(open('system-parameters.pkl','rb'))
+    MstarA = sp[path+'massA']
+    MstarB = sp[path+'massB']
+    Stars = [MstarA,MstarB]
+    if Star == 'A':
+        j = 0
+    if Star == 'B':
+        j = 1
+    Star = Stars[j]
+    from cliotools.bditools import load_masslimits
+    MassLimits = load_masslimits(path)
+    MassLimit = MassLimits[j]
+    
+    # Generate mass and sma arrays:
+    massArray = np.logspace(-3,0.01,Npoints)
+    smaArray = np.logspace(0,3,Npoints)
+    # Make a grid:
+    sma,mass = np.meshgrid(smaArray, massArray)
+    
+    # for each grid point, generate a random set of orbital elements:
+    from myastrotools.tools import draw_orbits, keplersconstant, keplerian_to_cartesian
+    N = sma.flatten().shape[0]
+    sma_throwaway, ecc, inc, argp, lon, orbit_fraction = draw_orbits(N, EccNielsenPrior = True, draw_lon = False)
+    # compute projected separation:
+    kep = keplersconstant(Star[0]*u.Msun,mass.flatten()*u.Msun)
+    meananom = 2*np.pi*orbit_fraction
+    pos, vel, acc = keplerian_to_cartesian(sma.flatten()*u.AU,ecc,inc,argp,lon,meananom,kep)
+    r = np.sqrt(pos[:,0]**2 + pos[:,1]**2).value
+    # reshape onto grid:
+    projSep = np.reshape(r,sma.shape)
+    
+    # Make mass limits into lookup spline:
+    from scipy.interpolate import UnivariateSpline
+    if np.any(np.isnan(MassLimit.fivesigma_mass_limit)):
+        ind = np.where(np.isnan(MassLimit.fivesigma_mass_limit))[0]
+        MassLimit.fivesigma_mass_limit[ind] = MassLimit.fivesigma_mass_limit[ind+1]
+        
+    MassLimitsSpline = UnivariateSpline(MassLimit.resep_au,MassLimit.fivesigma_mass_limit)
+    # Make a mask:
+    mask = np.zeros(sma.shape)
+    # Set the mask to 1 for all grid points within detection separation region:
+    ind = np.where((projSep <= np.max(MassLimit.resep_au.value)) & 
+                (projSep >= np.min(MassLimit.resep_au.value)))
+    mask[ind] = 1
+    # for each point in the detection region, look up the corresponding mass limit.
+    # If the mass is below the limit, set the mask value to zero (undetected):""
+    for p,m in zip(ind[0],ind[1]):
+        if mass[p,m] < MassLimitsSpline(projSep[p,m]):
+            mask[p,m] = 0
+    return mask, sma, mass
 
+def MakeCompletenessMap(path, Star, Ntimes = 1e3, Npoints = 100):
+    from myastrotools.tools import update_progress
+    Ntimes = int(Ntimes)
+    mapCube = np.zeros((Npoints,Npoints,Ntimes))
+    for i in range(Ntimes):
+        mask, sma, mass = MakeMap(path, Star, Npoints = Npoints)
+        mapCube[:,:,i] = mask
+        update_progress(i+1,Ntimes)
+        
+    finalMap = np.sum(mapCube,axis=2) / Ntimes
+    return finalMap, sma, mass
 
+def MakeCompletenessPlot(finalMap, sma, mass, StarName, Star, PlotDir = 'paper/completeness_maps/'):
+    from scipy.ndimage.filters import gaussian_filter
+    import matplotlib.pyplot as plt
+    sigma = 0.9
+    plt.imshow(finalMap, cmap='viridis')
+    plt.gca().axes.xaxis.set_visible(False)
+    plt.gca().axes.yaxis.set_visible(False)
+    cbarticks = [0, 0.2,0.4,0.6,0.8, np.max(finalMap)]
+    cbar = plt.colorbar(ticks=cbarticks)
+    cbarticklabels = [str(tick) for tick in cbarticks]
+    cbarticklabels[-1] = str(1)
+    cbar.set_ticklabels(cbarticklabels)
+    cbar.set_label('Completeness')
+    plt.contour(gaussian_filter(finalMap, sigma), levels = [0.1,0.5,0.9], colors=['w','k','k'], antialiased=True)
+
+    ax = plt.gca()
+    axins = ax.inset_axes([-0.01, -0.01, 1.02, 1.02], frameon = False)
+    axins.plot(sma,mass, marker='.', linestyle='none', alpha=0)
+    axins.set_facecolor(color=None)
+    axins.patch.set_alpha(0.0)
+    axins.set_yscale('log')
+    axins.set_xscale('log')
+    axins.set_xlabel('Semi-Major Axis [AU]')
+    axins.set_ylabel(r'Mass [M$_{\odot}$]')
+    axins.tick_params(axis='both', direction='in', pad=7)
+    plt.tight_layout()
+    plt.savefig(PlotDir + StarName.replace(' ','')+Star+'-completeness-map.png', facecolor = 'white', dpi = 300, bbox_inches='tight')
+    plt.close()
