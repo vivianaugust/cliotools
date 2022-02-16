@@ -2475,7 +2475,8 @@ def get_phoenix_model(model, wavelength_lim = None, DF = -8.0):
         t = t.loc[0:lim]
     return t
 
-def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux = [], filesuffix = ''):
+def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux = [], filesuffix = '', constraint = '3.9',\
+                    isochrone_set = 'BTSettl'):
     d = distance
     ############# Filter zero point fluxes: ###################
     # the wavelengths of the filter bands:
@@ -2556,12 +2557,26 @@ def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux =
     
     ########## load BT Settl grids #####################
     # Load BT Settl grids:
-    f = pd.read_table("../isochrones/model.BT-Settl.MKO.txt",header=3,delim_whitespace=True)
-    # we want to find a mass by interpolating from our literature age value and
-    # out just computed L' magnitudes:
-    BTmass = f['M/Ms'].values
-    BTage = f['t(Gyr)'].values
-    BTL = f["L'"].values
+    if isochrone_set == 'BTSettl':
+        file = os.path.join(os.path.dirname(__file__), 'isochrones/bt-settl_cifist2011_2015_mko_isochrones_plus_clio.csv')
+        #file = os.path.join(os.path.dirname(__file__), 'isochrones/model.BT-Settl.MKO.txt')
+        f = pd.read_csv(file)
+        #f = pd.read_table(file,header=3,delim_whitespace=True)
+        BTmass = f['M_Msun'].values
+        BTage = f['age_Gyr'].values
+        if constraint == "Lprime":
+            BTMag = f["Lprime"].values
+        elif constraint == "3.9":
+            BTMag = f["clio_3.9"].values
+    elif isochrone_set == 'bobcat':
+        file = os.path.join(os.path.dirname(__file__), 'isochrones/bobcat_mags.csv')
+        f = pd.read_csv(file)
+        BTmass = f['mass_Msun'].values
+        BTage = (10**f['log_age_yr'].values)*u.yr.to(u.Gyr)
+        if constraint == "Lprime":
+            BTMag = f["mag_Lprime"].values
+        elif constraint == "3.9":
+            BTMag = f["mag_clio3_95"].values
     
     ########### Interpolate mass for age and L' mag: ###################
     from scipy.interpolate import griddata
@@ -2574,9 +2589,9 @@ def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux =
     for i in range(len(fivesigma_abs_Mag)):
         # Generate an array of L' values around the mag value with error
         # (a placeholder for now, I haven't computed error accurately)
-        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        BTMagarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
         # interpolate masses from a grid of ages and L' mag:
-        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        BTmassarray = griddata((BTage, BTMag),BTmass, (BTagearray, BTMagarray), method='linear')
         fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
 
     pickle.dump(fivesigma_mass_limit, open(path+'StarA_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+filesuffix+'.pkl','wb'))
@@ -2596,9 +2611,9 @@ def GetMassLimits(path,reloadA,reloadB,m,models,spt,k,distance,age, interpflux =
     for i in range(len(fivesigma_abs_Mag)):
         # Generate an array of L' values around the mag value with error
         # (a placeholder for now, I haven't computed error accurately)
-        BTLarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
+        BTMagarray = np.random.normal(fivesigma_abs_Mag[i],0.1,100000)
         # interpolate masses from a grid of ages and L' mag:
-        BTmassarray = griddata((BTage, BTL),BTmass, (BTagearray, BTLarray), method='linear')
+        BTmassarray = griddata((BTage, BTMag),BTmass, (BTagearray, BTMagarray), method='linear')
         fivesigma_mass_limit[i] = np.nanmedian(BTmassarray)
     pickle.dump(fivesigma_mass_limit, open(path+'StarB_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+filesuffix+'.pkl','wb'))
 
@@ -2970,3 +2985,245 @@ def MakeCompletenessPlot(finalMap, sma, mass, StarName, Star, PlotDir = 'paper/c
     plt.tight_layout()
     plt.savefig(PlotDir + StarName.replace(' ','')+Star+'-completeness-map.png', facecolor = 'white', dpi = 300, bbox_inches='tight')
     plt.close()
+
+def get_xy_axes(reload, yaxis_left = 'flux contrast', xaxis_top = 'AU', xaxis_bottom = 'arcsec'):
+    if yaxis_left == 'mag contrast':
+        Y1 = reload.fivesigmacontrast
+        Y1_label = 'Contrast [magnitudes]'
+        ax.invert_yaxis()
+    elif yaxis_left == 'flux contrast':
+        Y1 = -reload.fivesigmacontrast/2.5
+        Y1_label = r"log$_{10}$(L$^{'}$\, Flux\,Contrast)"
+    elif yaxis_left == 'mass':
+        Y1 = reload.fivesigma_mass_limit
+        Y1_label = 'Mass [M$\odot$]'
+
+    if xaxis_bottom == 'lambda/D':
+        X1 = reload.resep
+        X1_label = r'Sep [$\frac{\lambda}{D}$]'
+    elif xaxis_bottom == 'AU':
+        X1 = reload.resep_au
+        X1_label = r'Sep [AU]'
+    elif xaxis_bottom == 'arcsec':
+        from cliotools.bditools import lod_to_arcsec
+        X1 = lod_to_arcsec(reload.resep)
+        X1_label = r'Sep [arcsec]'
+    else:
+        raise ValueError('Set "xaxis_bottom" and "xaxis_top" must be either "lambda/D", "arcsec" or "AU"')
+
+    if xaxis_top == 'lambda/D':
+        X2 = reload.resep
+        X2_label = r'Sep [$\frac{\lambda}{D}$]'
+    elif xaxis_top == 'AU':
+        X2 = reload.resep_au
+        X2_label = r'Sep [AU]'
+    elif xaxis_top == 'arcsec':
+        from cliotools.bditools import lod_to_arcsec
+        X2 = lod_to_arcsec(self.resep) 
+        X2_label = r'Sep [arcsec]'
+    else:
+        raise ValueError('Set "xaxis_bottom" and "xaxis_top" must be either "lambda/D", "arcsec" or "AU"')
+    return X1, X1_label, X2, X2_label, Y1, Y1_label
+
+
+def make_paper_plots(path, box, distance, sep, C, K_klipA, K_klipB, StarName, obsdate, wavelength, today,
+                     astamp, bstamp,
+                     filesuffix = '', mass_limit_filesuffix = '',
+                     inner_mask = 1., xy = (0.5,0.78), color='#8531E6',
+                     Stars = ['A','B'], savesuffix='', savemass = True, alpha = 1, figsize = (12,5), 
+                     lw = 3,
+                     mass_plot_ylim = [], cont_plot_ylim = [], 
+                     savefig = False,
+                     savefile = ''
+                    ):
+    from cliotools.bdi import ContrastCurve
+    from cliotools.bditools import lod_to_pixels
+    inner_mask = lod_to_pixels(inner_mask, 3.9)
+    outer_mask = box
+    Star = Stars[0]
+    K_klip = K_klipA
+    reloadA = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadA.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadA.Compute5SigmaContrast(sep_in_au = True, distance = distance)
+    reloadA.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadA.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+
+    Star = Stars[1]
+    K_klip = K_klipB
+    reloadB = ContrastCurve(path, Star, K_klip, sep, C, 
+                        sciencecube = astamp,
+                        refcube = bstamp,
+                        templatecube = astamp)
+
+    reloadB.LoadResults(path+'Star'+Star+'_ContrastCurvesSNRs'+\
+                                today+'Kklip'+str(int(K_klip))+'.innermask'+str(int(inner_mask))+\
+                                '.outermask'+str(int(outer_mask))+filesuffix+'.pkl')
+
+    reloadB.Compute5SigmaContrast(sep_in_au = True, distance = distance)
+    reloadB.fivesigma_mass_limit = pickle.load(open(path+'Star'+Star+\
+                                                           '_fivesigma_mass_limit_Kklip'+str(reloadB.K_klip)+\
+                                mass_limit_filesuffix+'.pkl','rb'))
+    
+    print(StarName)
+    ind = np.where(reloadA.fivesigmacontrast == np.max(reloadA.fivesigmacontrast))
+    from cliotools.bditools import lod_to_arcsec
+    print('A')
+    print('Location of max constrast',reloadA.resep_au[ind],lod_to_arcsec(reloadA.resep[ind]),'arcsec')
+    print('Min flux contrast',np.min(reloadA.fivesigmacontrast/-2.5))
+    print('Max mag contrast',np.max(reloadA.fivesigmacontrast))
+    print('Min planet mass',np.nanmin(reloadA.fivesigma_mass_limit))
+    
+    ind = np.where(reloadB.fivesigmacontrast == np.max(reloadB.fivesigmacontrast))
+    from cliotools.bditools import lod_to_arcsec
+    print('B')
+    print('Location of max constrast',reloadB.resep_au[ind],lod_to_arcsec(reloadB.resep[ind]),'arcsec')
+    print('Min flux contrast',np.min(reloadB.fivesigmacontrast/-2.5))
+    print('Max mag contrast',np.max(reloadB.fivesigmacontrast))
+    print('Min planet mass',np.nanmin(reloadB.fivesigma_mass_limit))
+    print('Min sep AU',np.nanmin(reloadB.resep_au))
+    print('Max sep AU',np.nanmax(reloadB.resep_au))
+
+
+    colors = np.array(['#8531E6','#E66550', '#F5B92B','#8531E6','#E66550', '#F5B92B','#8531E6','#E66550', '#F5B92B'])
+    linestyles = np.array(['-','-','-','-.','-.','-.',':',':',':'])
+    
+    fig = plt.figure(figsize = figsize)
+    fig.subplots_adjust(hspace=0)
+
+    ax1 = plt.subplot2grid((1,2), (0, 0), colspan=1)
+    ax12 = ax1.twiny()
+    X1, X1_label, X2, X2_label, Y1, Y1_label = get_xy_axes(reloadA, 
+                                                           yaxis_left = 'flux contrast', 
+                                                           xaxis_top = 'AU', 
+                                                           xaxis_bottom = 'arcsec')
+    ax1.plot(X1,Y1,alpha = alpha, color=colors[0], lw = lw)
+    ax12.plot(X2,Y1,alpha = 0)
+    ax1.set_ylabel(Y1_label)
+    ax1.set_xlabel(X1_label)
+    ax1.grid(ls=':')
+
+    ax12.set_xlabel(X2_label)
+    ax12.xaxis.labelpad = 10
+    
+    X1, X1_label, X2, X2_label, Y1, Y1_label = get_xy_axes(reloadB, 
+                                                           yaxis_left = 'flux contrast', 
+                                                           xaxis_top = 'AU', 
+                                                           xaxis_bottom = 'arcsec')
+    ax1.plot(X1,Y1,alpha = alpha, color=colors[1], lw = lw)
+    if type(cont_plot_ylim) == float:
+        ax1.set_ylim(top = cont_plot_ylim)
+    
+
+    
+    ax2 = plt.subplot2grid((1,2), (0, 1), colspan=1)
+    ax22 = ax2.twiny()
+    X1, X1_label, X2, X2_label, Y1, Y1_label = get_xy_axes(reloadA, 
+                                                           yaxis_left = 'mass', 
+                                                           xaxis_top = 'AU', 
+                                                           xaxis_bottom = 'arcsec')
+    
+    ax2.plot(X1,Y1,alpha = alpha, color=colors[0], lw = lw)
+        
+    ax22.plot(X2,Y1,alpha = 0, color=color)
+    ax2.set_ylabel(Y1_label)
+    ax2.set_xlabel(X1_label)
+    ax2.grid(ls=':')
+    ax22.set_xlabel(X2_label)
+    ax22.xaxis.labelpad = 10
+    
+    X1, X1_label, X2, X2_label, Y1, Y1_label = get_xy_axes(reloadB, 
+                                                           yaxis_left = 'mass', 
+                                                           xaxis_top = 'AU', 
+                                                           xaxis_bottom = 'arcsec')
+        
+    ax2.plot(X1,Y1,alpha = alpha, color=colors[1], lw = lw)
+        
+    if type(mass_plot_ylim) == float:
+        ax2.set_ylim(top = mass_plot_ylim)
+        
+    import matplotlib.lines as mlines
+    line1 = mlines.Line2D([], [], color=colors[0], marker='',
+                              markersize=15, ls = linestyles[0], lw = lw,
+                              label = r'A, N$_{\rm{KLIP,A}}$ = '+str(K_klipA))
+    line2 = mlines.Line2D([], [], color=colors[1], marker='',
+                              markersize=15, ls = linestyles[0], lw = lw,
+                              label = r'B, N$_{\rm{KLIP,B}}$ = '+str(K_klipB))
+    handles1 = [line1,line2]
+    ax2.legend(handles = handles1, handletextpad=0.2,
+                                        bbox_to_anchor=(0.99, 0.99),
+                                       loc='upper right', fontsize = 22
+                                      )
+
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(savefile,
+                bbox_inches='tight', facecolor = 'white',dpi = 350)
+
+def make_completeness_maps(StarName, finalMap1, finalMap2, sma, mass,
+                     Stars = ['A','B'], figsize = (10,5), 
+                     savefig = False,
+                     savefile = ''
+                    ):
+    ims = [finalMap1, finalMap2]
+    from scipy.ndimage.filters import gaussian_filter
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MultipleLocator,AutoMinorLocator
+    sigma = 0.9
+
+    fig, axes = plt.subplots(1, 2, sharey=True, figsize=figsize)
+    fig.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
+    plt.xlabel('Semi-Major Axis [AU]')
+
+    for i, cell in enumerate(axes):
+        x = cell.imshow(ims[i], cmap='viridis')
+        cell.axes.xaxis.set_visible(False)
+        cell.axes.yaxis.set_visible(False)
+        cell.contour(gaussian_filter(ims[i], sigma), levels = [0.1,0.5,0.9], colors=['w','k','k'], 
+                    antialiased=True)
+        cell.annotate(Stars[i], xy = (0.1,0.05), xycoords = 'axes fraction', ha = 'center',
+                        color='white', 
+                        fontsize = 30)
+        axins = cell.inset_axes([-0.01, -0.01, 1.02, 1.02], frameon = False)
+        axins.plot(sma,mass, marker='.', linestyle='none', alpha=0)
+        axins.set_facecolor(color=None)
+        axins.patch.set_alpha(0.0)
+        axins.set_yscale('log')
+        axins.set_xscale('log')
+        if i == 0:
+            axins.set_ylabel(r'Mass [M$_{\odot}$]')
+            axins.tick_params(axis='both', direction='in', pad=7)
+            axins.set_xticks([1,10,100], minor=True)
+        if i == 1:
+            axins.tick_params(axis='both', direction='in', pad=7, labelleft=False, left=False)
+            axins.set_xticks([10,100,1000], minor=True)
+    include_name = True
+    if include_name:
+        axes[1].annotate(StarName, xy = (0.97,0.05), xycoords = 'axes fraction', ha = 'right',
+                            color='white', 
+                            fontsize = 30)
+
+    cax = axes[1].inset_axes([1.04, 0., 0.06, 1.0], transform=axes[1].transAxes)
+    cbarticks = [0, 0.2,0.4,0.6,0.8, np.max(ims[1])]
+    cbar = fig.colorbar(x, ax=axes[1], cax=cax, ticks=cbarticks)
+    cbar.ax.tick_params(labelsize=20) 
+    cbar.ax.yaxis.get_offset_text().set_fontsize(10)
+    cbarticklabels = [str(tick) for tick in cbarticks]
+    cbarticklabels[-1] = str(1)
+    cbar.set_ticklabels(cbarticklabels)
+    cbar.set_label('Completeness')
+
+    plt.tight_layout(w_pad = -0.4)
+    if savefig:
+        plt.savefig(savefile,
+                bbox_inches='tight', facecolor = 'white',dpi = 350)
+        
+        

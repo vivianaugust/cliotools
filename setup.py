@@ -13,6 +13,6 @@ setup(name='cliotools',
       license='MIT',
       packages=['cliotools'],
       install_requires=['numpy','scipy','astropy','matplotlib','opencv-python','photutils'],
-      package_data={'cliotools': ['system-parameters.pkl']},
+      package_data={'cliotools': ['system-parameters.pkl','isochrones/*']},
       include_package_data=True,
       zip_safe=False)
