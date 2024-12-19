@@ -1,0 +1,21 @@
+#     filename,xca,yca,xcb,ycb
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00001.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00002.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00003.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00004.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00005.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00006.fit,427.325667826244,353.9010550125519,417.0,535.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00007.fit,427.325667826244,353.9010550125519,417.0,535.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00008.fit,427.325667826244,353.9010550125519,417.0,535.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00009.fit,427.325667826244,353.9010550125519,417.0,535.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00010.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00011.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00012.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00013.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00014.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00015.fit,427.2151967917955,353.80104788563773,384.9023025058305,377.4277502560589
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00016.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00017.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00018.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00019.fit,176.35961737671835,351.0,177.0,352.0
+/Users/bioversedeveloper/new_clio/badpixfix/cliotools/Data/HD_142415/HD142415Ks_00020.fit,176.35961737671835,351.0,177.0,352.0

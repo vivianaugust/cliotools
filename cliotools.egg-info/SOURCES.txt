@@ -11,9 +11,13 @@ cliotools/global_badpixfix.py
 cliotools/miscellany.py
 cliotools/pca_skysub.py
 cliotools/pca_skysub_wskyframes.py
+cliotools/system-parameters.pkl
 cliotools.egg-info/PKG-INFO
 cliotools.egg-info/SOURCES.txt
 cliotools.egg-info/dependency_links.txt
 cliotools.egg-info/not-zip-safe
 cliotools.egg-info/requires.txt
 cliotools.egg-info/top_level.txt
+cliotools/isochrones/bobcat_mags.csv
+cliotools/isochrones/bt-settl_cifist2011_2015_mko_isochrones_plus_clio.csv
+cliotools/isochrones/model.BT-Settl.MKO.txt
